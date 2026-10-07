@@ -45,7 +45,7 @@ const Charts = (() => {
       if (labels.length <= 60) s.values.forEach((v, i) => { if (v != null) body += `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="${col}"><title>${esc(s.name)} ${esc(labels[i])}: ${esc(fmt(v))}</title></circle>`; });
     });
     const legend = series.length > 1 ? `<div class="legend">${series.map((s, i) => `<span><i style="background:${s.color || COLORS[i % COLORS.length]}"></i>${esc(s.name)}</span>`).join("")}</div>` : "";
-    return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img"><g class="grid">${g}</g>${xl}${body}</svg>${legend}`;
+    return `<svg class="chart draw" viewBox="0 0 ${W} ${H}" role="img"><g class="grid">${g}</g>${xl}${body}</svg>${legend}`;
   }
 
   /* Horizontal bars: rows [[label, value], ...] */
@@ -58,7 +58,7 @@ const Charts = (() => {
       const yy = 4 + i * rowH, w = (Math.abs(r[1]) / max) * (W - labelW - R);
       const lb = String(r[0]);
       s += `<text x="${labelW - 8}" y="${yy + 16}" text-anchor="end">${esc(lb.length > Math.floor(labelW / 7.4) ? lb.slice(0, Math.floor(labelW / 7.4) - 1) + "…" : lb)}<title>${esc(lb)}</title></text>`
-        + `<rect x="${labelW}" y="${yy + 3}" width="${Math.max(w, 1).toFixed(1)}" height="${rowH - 9}" rx="4" fill="${color}"><title>${esc(lb)}: ${esc(fmt(r[1]))}</title></rect>`
+        + `<rect x="${labelW}" y="${yy + 3}" width="${Math.max(w, 1).toFixed(1)}" height="${rowH - 9}" rx="4" fill="${color}" class="bx" style="--i:${i}"><title>${esc(lb)}: ${esc(fmt(r[1]))}</title></rect>`
         + `<text x="${labelW + w + 6}" y="${yy + 16}">${esc(fmt(r[1]))}</text>`;
     });
     return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
@@ -77,7 +77,7 @@ const Charts = (() => {
     rows.forEach((r, i) => {
       const h = (r[1] / hi) * (H - T - B), xx = L + i * bw + bw * 0.12;
       const fade = highlightLast && i === rows.length - 1;
-      b += `<rect x="${xx.toFixed(1)}" y="${(H - B - h).toFixed(1)}" width="${(bw * 0.76).toFixed(1)}" height="${Math.max(h, 0).toFixed(1)}" rx="3" fill="${color}" ${fade ? 'opacity=".45"' : ""}><title>${esc(r[0])}: ${esc(fmt(r[1]))}${fade ? " (partial month)" : ""}</title></rect>`;
+      b += `<rect x="${xx.toFixed(1)}" y="${(H - B - h).toFixed(1)}" width="${(bw * 0.76).toFixed(1)}" height="${Math.max(h, 0).toFixed(1)}" rx="3" fill="${color}" class="bc" style="--i:${i}" ${fade ? 'opacity=".45"' : ""}><title>${esc(r[0])}: ${esc(fmt(r[1]))}${fade ? " (partial month)" : ""}</title></rect>`;
       if (i % step === 0) b += `<text x="${(xx + bw * 0.38).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(String(r[0]).slice(2, 10))}</text>`;
     });
     return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img"><g class="grid">${g}</g>${b}</svg>`;

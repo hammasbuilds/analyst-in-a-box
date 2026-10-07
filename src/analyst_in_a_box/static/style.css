@@ -245,3 +245,97 @@ a.btn { text-decoration: none; display: inline-block; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
 }
+
+/* ================= Motion pass (see docs/MOTION.md) =================
+   Tokens: Material 3 easing, Linear-style restraint (transform and opacity). */
+:root {
+  --dur-fast: 120ms; --dur-base: 200ms; --dur-slow: 320ms;
+  --ease: cubic-bezier(.2, 0, 0, 1);            /* M3 standard */
+  --ease-out: cubic-bezier(.05, .7, .1, 1);     /* M3 emphasized decelerate */
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --lift: 0 2px 4px rgba(15,31,46,.06), 0 14px 32px rgba(15,31,46,.12);
+}
+:root[data-theme="dark"] { --lift: 0 2px 4px rgba(0,0,0,.5), 0 14px 32px rgba(0,0,0,.45); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --lift: 0 2px 4px rgba(0,0,0,.5), 0 14px 32px rgba(0,0,0,.45); } }
+
+/* buttons */
+.btn, .chip, .tabs button, .icon-btn { position: relative; overflow: hidden; -webkit-tap-highlight-color: transparent;
+  transition: transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-base) var(--ease), filter var(--dur-fast) var(--ease), background-color var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease), color var(--dur-base) var(--ease); }
+.btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); box-shadow: 0 6px 16px rgba(4,120,87,.28); }
+.btn.gold:hover:not(:disabled), .side .btn:hover:not(:disabled) { box-shadow: 0 6px 16px rgba(233,185,73,.35); }
+.btn.ghost:hover:not(:disabled) { box-shadow: 0 4px 12px rgba(15,31,46,.12); filter: none; border-color: var(--accent); }
+.btn:active:not(:disabled), .chip:active, .tabs button:active { transform: scale(.97); box-shadow: none; transition-duration: 60ms; }
+.chip:hover { transform: translateY(-1px); }
+.ripple { position: absolute; border-radius: 50%; background: currentColor; opacity: .28; transform: scale(0); pointer-events: none; animation: ripple 560ms var(--ease-out) forwards; }
+@keyframes ripple { to { transform: scale(1); opacity: 0; } }
+.btn.is-busy { pointer-events: none; color: transparent !important; }
+.btn.is-busy::after { content: ""; position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; animation: sp .7s linear infinite; }
+.btn.ghost.is-busy::after { border-color: var(--border); border-top-color: var(--accent); }
+.btn.gold.is-busy::after, .side .btn.is-busy::after { border-color: rgba(27,21,3,.25); border-top-color: #1b1503; }
+.btn.flash-ok { animation: flash-ok 700ms var(--ease) both; }
+.btn.flash-bad { animation: flash-bad 700ms var(--ease) both; }
+@keyframes flash-ok { 0% { box-shadow: 0 0 0 0 rgba(16,185,129,.7); } 100% { box-shadow: 0 0 0 12px rgba(16,185,129,0); } }
+@keyframes flash-bad { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.7); } 100% { box-shadow: 0 0 0 12px rgba(239,68,68,0); } }
+
+/* cards and KPIs: elevation, lift, pointer spotlight */
+.card, .kpi { transition: transform var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease); }
+.card:hover, .kpi:hover { box-shadow: var(--lift); }
+.card:hover { transform: translateY(-2px); }
+.card.flat:hover, details.card:hover, .drawer .card:hover { transform: none; box-shadow: var(--shadow); }
+.card::after, .kpi::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0;
+  background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 0%), rgba(16,185,129,.11), transparent 70%); transition: opacity var(--dur-slow) var(--ease); }
+.card:hover::after, .kpi:hover::after { opacity: 1; }
+.enter { animation: enter var(--dur-slow) var(--ease-out) both; animation-delay: calc(var(--i, 0) * 45ms); }
+@keyframes enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+tr.click { transition: background-color var(--dur-fast) var(--ease); }
+.alert { transition: transform var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease); }
+.alert:hover { transform: translateX(2px); box-shadow: var(--shadow); }
+#app > .pagehead, #app > .hero { animation: rise var(--dur-slow) var(--ease-out) both; }
+
+/* nav */
+aside nav a { transition: background-color var(--dur-base) var(--ease), color var(--dur-base) var(--ease), transform var(--dur-base) var(--ease); }
+aside nav a:hover { transform: translateX(2px); }
+aside nav a svg { transition: transform var(--dur-base) var(--ease-spring); } aside nav a:hover svg { transform: scale(1.12); }
+aside nav a.active::before { animation: bar var(--dur-slow) var(--ease-out) both; }
+@keyframes bar { from { transform: scaleY(0); } to { transform: none; } }
+
+/* inputs */
+input[type=text], input[type=number], input[type=url], input[type=password], textarea, select {
+  transition: border-color var(--dur-base) var(--ease), box-shadow var(--dur-base) var(--ease), background-color var(--dur-base) var(--ease); }
+input:focus, textarea:focus, select:focus { animation: ring var(--dur-slow) var(--ease-out); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent); }
+@keyframes ring { from { box-shadow: 0 0 0 0 var(--accent-soft), 0 0 0 1px var(--accent); } }
+input[type=text]:not(:placeholder-shown):not(:focus):not([aria-invalid]) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+[aria-invalid="true"] { border-color: var(--bad) !important; box-shadow: 0 0 0 3px var(--bad-soft) !important; }
+.shake { animation: shake 420ms var(--ease) both; }
+@keyframes shake { 15%, 55% { transform: translateX(-6px); } 35%, 75% { transform: translateX(6px); } 100% { transform: none; } }
+.chips > .chip.enter { animation-name: pop; animation-timing-function: var(--ease-spring); animation-delay: calc(var(--i, 0) * 30ms); }
+@keyframes pop { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+
+/* toast: springs up, coloured by outcome, gold hairline counts down */
+.toast { display: flex; align-items: center; gap: 8px; transition: transform var(--dur-slow) var(--ease-spring), opacity var(--dur-base) var(--ease); box-shadow: var(--lift); overflow: hidden; }
+.toast::before { content: "\2713"; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); font-size: .72rem; font-weight: 800; flex: none; }
+.toast.bad { background: var(--bad); color: #fff; } .toast.bad::before { content: "!"; background: #fff; color: var(--bad); }
+.toast::after { content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: var(--gold-fill); transform-origin: left; transform: scaleX(0); }
+.toast.show::after { animation: drain 2800ms linear forwards; } .toast.bad.show::after { animation-duration: 6000ms; }
+@keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+/* charts draw in */
+svg.draw, svg.spark { animation: wipe 900ms var(--ease-out) both; }
+@keyframes wipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 -8px 0 0); } }
+svg.chart .bx { transform-box: fill-box; transform-origin: left center; animation: grow-x 700ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 40ms); }
+svg.chart .bc { transform-box: fill-box; transform-origin: center bottom; animation: grow-y 700ms var(--ease-out) both; animation-delay: calc(var(--i, 0) * 25ms); }
+@keyframes grow-x { from { transform: scaleX(0); } } @keyframes grow-y { from { transform: scaleY(0); } }
+svg.chart rect.bx:hover, svg.chart rect.bc:hover { filter: brightness(1.15); }
+svg.chart circle { transition: r var(--dur-fast) var(--ease); } svg.chart circle:hover { r: 5; }
+
+/* drawer / scrim */
+.scrim { animation: fade var(--dur-base) var(--ease) both; } @keyframes fade { from { opacity: 0; } }
+.drawer { animation: slidein var(--dur-slow) var(--ease-out) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .enter, #app > .pagehead, #app > .hero, svg.draw, svg.spark, svg.chart .bx, svg.chart .bc { animation: none !important; }
+  .btn:hover:not(:disabled), .card:hover, .alert:hover, aside nav a:hover, .chip:hover { transform: none; }
+  .btn.is-busy::after { animation-duration: 1.6s !important; animation-iteration-count: infinite !important; }
+  .toast.show::after { animation: none !important; }
+}

@@ -24,7 +24,7 @@ async function api(path, opts = {}) {
 const post = (p, body) => api(p, { method: "POST", body });
 let toastT;
 function toast(msg, bad) {
-  const t = $("#toast"); t.textContent = msg; t.style.background = bad ? "var(--bad)" : ""; t.style.color = bad ? "#fff" : "";
+  const t = $("#toast"); t.textContent = msg; t.classList.toggle("bad", !!bad); t.classList.remove("show"); void t.offsetWidth;
   t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), bad ? 6000 : 2800);
 }
 const busy = (el, on) => { if (el) { el.disabled = on; } };
@@ -114,7 +114,7 @@ function heroOutput(res, total) {
 }
 let heroSeq = 0;
 async function runHero(q, preview = false) {
-  if (!q.trim()) { toast("Type a question first", true); return; }
+  if (!q.trim()) { toast("Type a question first", true); Motion.shake($("#t-q")); return; }
   const seq = ++heroSeq;
   $("#t-q").value = q;
   $("#t-go").disabled = true;
@@ -294,7 +294,7 @@ PAGES.ask = async (app) => {
     <div id="ask-out" style="margin-top:16px"></div>
     <div class="card" style="margin-top:16px"><h2>Recent questions</h2><div id="hist"></div></div>`;
   const go = async (q) => {
-    if (!q.trim()) return; $("#q").value = q; $("#ask-out").innerHTML = loading("Asking");
+    if (!q.trim()) { Motion.shake($("#q")); return; } $("#q").value = q; $("#ask-out").innerHTML = loading("Asking");
     try { showResult(await post("/api/ask", { question: q })); } catch (e) { $("#ask-out").innerHTML = err(e); }
     loadHistory();
   };

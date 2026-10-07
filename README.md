@@ -107,6 +107,14 @@ All from the real UI, produced by `scripts/ui_tour.py`, which fails on any unexp
 | ![Data](docs/screenshots/02-data.png) **Data**: sources, upload, schema | ![Dark](docs/screenshots/12-dashboard-dark.png) **Dark mode** (phone layout: [13](docs/screenshots/13-mobile-ask.png)) |
 | ![Sign in](docs/screenshots/14-sign-in.png) **Sign in** with a name and PIN before acting | ![Audit](docs/screenshots/15-audit-verified.png) **Audit**: Verify checks the chain, the signed head and every ticket against the trail |
 
+## Interaction
+
+Pure CSS and one small vanilla JS file (`static/motion.js`), no build step. Buttons ripple from the pointer, press to 0.97 and show a spinner while their request runs, then flash green or red. Cards lift with a pointer spotlight, KPI numbers roll up, charts draw in, the toast springs up, and an empty question shakes the field. Everything is switched off under `prefers-reduced-motion`. Research and tokens: [docs/MOTION.md](docs/MOTION.md).
+
+![Run button busy while the answer loads](docs/screenshots/17-interaction-button-busy.png)
+![Empty question: field shakes, error toast](docs/screenshots/18-interaction-shake-toast.png)
+![Card hover: lift and spotlight](docs/screenshots/19-interaction-card-hover.png)
+
 ## How it works
 
 ```mermaid
