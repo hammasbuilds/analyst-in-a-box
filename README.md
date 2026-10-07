@@ -12,7 +12,7 @@ The home page runs a real question through the app's own `/api/ask` when it load
 
 | Input (English or Roman Urdu) | Output |
 |---|---|
-| `top 5 products by revenue last quarter` | SQL, 5 rows (PAPER CRAFT , LITTLE BIRDIE £168,469.60 first), bar chart; "last quarter" is the newest quarter in the data |
+| `top 5 products by revenue last quarter` | SQL, 5 rows, net revenue (PAPER CHAIN KIT 50'S CHRISTMAS £13,556.72 first; PAPER CRAFT , LITTLE BIRDIE is netted to zero by its cancellation), bar chart; "last quarter" is the newest quarter in the data |
 | `monthly revenue in 2011` | SQL with a 2011 filter, 12 monthly rows, line chart |
 | `is mahine sab se zyada bikne wali cheez` | Roman Urdu understood; "this month" filter, top products by revenue, bar chart |
 | `revenue by country` | SQL, 32 rows, bar chart |
@@ -28,7 +28,7 @@ The home page runs a real question through the app's own `/api/ask` when it load
 | **Customer risk** | WoE/IV scorecard with points and reason codes per customer, Gini and Brier on train, validation and test, calibration, a fairness audit by country and tenure. Raise a credit-limit ticket from a customer. |
 | **Workflows** | Tickets for refunds, credit-limit changes and fraud reviews. PIN sign-in, approval gates by amount, four-eyes, roles, a state machine, and a SHA-256 hash-chained audit trail with a signed head and a cross-check against the live tables. |
 | **Export** | Any query result as a CSV (up to 50,000 rows) and the audit trail as a CSV. Text that starts with `=`, `+`, `-` or `@` is neutralised so a spreadsheet will not run it. |
-| **Dashboard** | A Try-it panel (question in, SQL, table and chart out), KPI cards with 13-week sparklines and change against the previous 30 days, revenue by month, country, product and category. |
+| **Dashboard** | A Try-it panel (question in, SQL, table and chart out), KPI cards with 13-week sparklines and change against the previous 30 days, net revenue by month, country, product and category. |
 
 ## Run it
 
@@ -68,8 +68,9 @@ Input : UCI Online Retail II, seeded sample of 2,000 customers (CC BY 4.0)
         291,897 order lines -> 15,860 orders, 2,000 customers, 4,454 products (25 MB SQLite), 2009-12-01 to 2011-12-09
 
 Ask your data (no model)
-  'Top 5 products by revenue in 2011'        [en] -> 5 rows, first ['PAPER CRAFT , LITTLE BIRDIE', 168469.6]
-  'har mahine ki bikri'                      [roman-ur] -> 25 rows, first ['2009-12', 238808.69]
+  'Top 5 products by revenue in 2011'        [en] -> 5 rows, first ['WHITE HANGING HEART T-LIGHT HOLDER', 43615.45]
+  'Top 5 products by gross revenue in 2011'  [en] -> 5 rows, first ['PAPER CRAFT , LITTLE BIRDIE', 168469.6]
+  'har mahine ki bikri'                      [roman-ur] -> 25 rows, first ['2009-12', 231572.75]
   'kitne customers hain'                     [roman-ur] -> 1 rows, first [1983]
   write attempt 'DELETE FROM orders' -> refused: only SELECT is permitted, got Delete
 
@@ -89,6 +90,7 @@ Customer risk (refunds of 5% or more of purchases in the 240 days after 2011-04-
 
 The sample is a seeded random sample of 2,000 customers (all of their rows, 291,897 order lines) from the UCI *Online Retail II* file: a UK online giftware wholesaler, 1 December 2009 to 9 December 2011 (Chen, D., UCI Machine Learning Repository, CC BY 4.0). It ships as `src/analyst_in_a_box/sample/online_retail_subset.csv.gz` (4.2 MB) and is loaded into five tables on first run: `customers`, `products`, `orders`, `order_items`, `payments`. `scripts/prepare_sample.py` shows the cut. Two things are derived rather than given, and the UI says so where it matters:
 
+- **Revenue means net revenue.** Every revenue figure (Ask, the Try-it panel, the dashboard KPI, its sparkline and charts) is completed sales minus cancelled and refunded lines, netted per product and per period: cancellation lines carry negative amounts, so the SQL is a plain `SUM(oi.line_total)` with no status filter. Say `gross revenue` or `gross sales` for the old meaning, completed orders only, before cancellations (`WHERE o.status = 'completed'`). A cancellation is netted in the period it was issued, so a sale cancelled in a later month shows up as a negative in that month. Forecasts are in units, not revenue, and are unaffected. The refund rate is refunds over gross sales, and average order value stays per completed order.
 - **Payments** are one row per invoice, `payment` or (for a cancellation invoice) `refund`. The file has no payment method and no separate payment date.
 - **Categories** come from keyword rules on the product description (`CATEGORY_RULES` in `canon.py`); the file has none.
 
@@ -170,7 +172,7 @@ Every number is printed by the code in this repository.
 
 | Check | Result |
 |---|---|
-| Tests | 152 passing, ruff clean. API tests hit every endpoint; `test_security.py` (82 tests) holds every attack found in the review as a regression test; workflow tests cover gates, roles, four-eyes, illegal transitions and over-refund. |
+| Tests | 157 passing, ruff clean. API tests hit every endpoint; `test_security.py` (82 tests) holds every attack found in the review as a regression test; workflow tests cover gates, roles, four-eyes, illegal transitions and over-refund. |
 | Hermetic | Tests build a 700-customer slice of the sample in a temp directory and never touch `~/.analyst-in-a-box`. |
 | Forecast | Totals disagree before reconciling and add up after; 38 of 59 series beat seasonal naive on the backtest. At the total, MinT-weighted MAE is 11,141 units a week against 15,462 for seasonal naive. |
 | Fraud | 255 alerts on 15,860 orders (24 high, 81 medium, 150 low). A planted £250,000 manual-line order in a copy of the data is flagged high (test). |
@@ -214,7 +216,7 @@ No bypass of the read-only guarantee was found: every attack above was refused b
 - **A "pick the best of three models" step made the backtest worse** (a noisy 8-week holdout chooses noise), so model choice is by demand pattern only.
 - **An invoice number of 0 was dropped.** In an uploaded sheet an integer id column can hold 0, and `str(value or "")` turned it into "no invoice"; found by a test of the column-mapping path.
 - **Two regexes carried backspace characters** from an escaping slip in a patch script, silently disabling "how many orders"; the tests caught it.
-- **The largest "completed" order is also a data artefact.** The top product by revenue is a 80,995-unit order cancelled minutes later on the same day. Both rows are in the file; revenue counts the completed invoice and refunds count the cancellation.
+- **Revenue ranked a cancelled order first.** Order 581483 (80,995 x PAPER CRAFT, LITTLE BIRDIE, £168,469.60) was cancelled twelve minutes later by C581484, yet "top 5 products by revenue last quarter" ranked it first because revenue counted completed orders only. "Revenue" is now net of cancellations everywhere, `gross revenue` keeps the old figure, and a regression test pins that the product no longer tops the net ranking.
 
 ## Licence
 

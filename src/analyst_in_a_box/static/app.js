@@ -130,7 +130,7 @@ async function runHero(q, preview = false) {
 const heroHtml = () => `<section class="hero page-in" aria-label="Try it">
     <span class="kicker"><i></i>Try it, live</span>
     <h1>Ask your numbers in plain English or Roman Urdu.</h1>
-    <p class="sub">Type a business question. You get the SQL that answers it, the result table and a chart, produced right now by this app against its own data. Nothing can write to your data.</p>
+    <p class="sub">Type a business question. You get the SQL that answers it, the result table and a chart, produced right now by this app against its own data. Nothing can write to your data. &ldquo;Revenue&rdquo; means net revenue, completed sales minus cancellations; say &ldquo;gross revenue&rdquo; for the figure before cancellations.</p>
     <div class="tryit">
       <div class="pane"><div class="tag"><b>1</b>Your question<span class="badge acc">no sign-in needed</span></div>
         <label class="sr" for="t-q" style="position:absolute;left:-9999px">Business question</label>
@@ -156,10 +156,10 @@ PAGES[""] = async (app) => {
   box.innerHTML = `<p class="muted small" style="margin:0 0 10px">Business pulse as of <b>${esc(d.as_of)}</b>, the newest order in the data. ${num(d.totals.orders)} orders, ${num(d.totals.customers)} customers, ${num(d.totals.products)} products. Sparklines show the last 13 weeks.</p>`
     + `<div class="kpis">${d.cards.map(card).join("")}</div>`
     + `<div class="grid cols-2">
-      <div class="card"><h2>Revenue by month</h2>${Charts.columns({ rows: d.charts.monthly_revenue, fmt: (v) => "£" + Charts.compact(v), highlightLast: d.last_month_partial })}${d.last_month_partial ? '<p class="small muted">The newest month is partial, so its bar is faded.</p>' : ""}</div>
-      <div class="card"><h2>Revenue by country</h2>${Charts.bars({ rows: d.charts.revenue_by_country, fmt: (v) => "£" + Charts.compact(v), color: "var(--c2)" })}</div>
-      <div class="card"><h2>Top products by revenue</h2>${Charts.bars({ rows: d.charts.top_products, fmt: (v) => "£" + Charts.compact(v), color: "var(--c3)", labelW: 190 })}</div>
-      <div class="card"><h2>Revenue by category</h2>${Charts.bars({ rows: d.charts.revenue_by_category, fmt: (v) => "£" + Charts.compact(v), color: "var(--c1)", labelW: 150 })}<p class="small muted">Categories are derived from product descriptions by keyword rules.</p></div>
+      <div class="card"><h2>Net revenue by month</h2>${Charts.columns({ rows: d.charts.monthly_revenue, fmt: (v) => "£" + Charts.compact(v), highlightLast: d.last_month_partial })}${d.last_month_partial ? '<p class="small muted">The newest month is partial, so its bar is faded.</p>' : ""}</div>
+      <div class="card"><h2>Net revenue by country</h2>${Charts.bars({ rows: d.charts.revenue_by_country, fmt: (v) => "£" + Charts.compact(v), color: "var(--c2)" })}</div>
+      <div class="card"><h2>Top products by net revenue</h2>${Charts.bars({ rows: d.charts.top_products, fmt: (v) => "£" + Charts.compact(v), color: "var(--c3)", labelW: 190 })}</div>
+      <div class="card"><h2>Net revenue by category</h2>${Charts.bars({ rows: d.charts.revenue_by_category, fmt: (v) => "£" + Charts.compact(v), color: "var(--c1)", labelW: 150 })}<p class="small muted">Categories are derived from product descriptions by keyword rules. Net revenue is completed sales minus cancelled and refunded lines.</p></div>
     </div>`;
 };
 
@@ -290,7 +290,7 @@ PAGES.ask = async (app) => {
   app.innerHTML = head("Ask your data", "Ask in English or Roman Urdu. You always see the SQL, and nothing can write to your data.")
     + `<div class="card stack"><div class="row" style="flex-wrap:nowrap"><input type="text" id="q" placeholder="e.g. Top 10 products by revenue in 2011   |   har mahine ki bikri" autocomplete="off"><button class="btn" id="go">Ask</button></div>
     <div class="chips">${ex.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>
-    <p class="small muted">${hasLLM ? `Language model: <b>${esc(S.state.llm.provider)}:${esc(S.state.llm.model)}</b>. Its SQL goes through the same checks, and the built-in parser answers if it fails.` : "No language model configured: questions are answered by the built-in parser, which knows revenue, orders, customers, units, refunds, averages, rankings, time breakdowns, countries and categories. Set ANALYST_LLM to add one."}</p></div>
+    <p class="small muted">${hasLLM ? `Language model: <b>${esc(S.state.llm.provider)}:${esc(S.state.llm.model)}</b>. Its SQL goes through the same checks, and the built-in parser answers if it fails.` : "No language model configured: questions are answered by the built-in parser, which knows revenue (net of cancellations; say &ldquo;gross revenue&rdquo; for the figure before them), orders, customers, units, refunds, averages, rankings, time breakdowns, countries and categories. Set ANALYST_LLM to add one."}</p></div>
     <div id="ask-out" style="margin-top:16px"></div>
     <div class="card" style="margin-top:16px"><h2>Recent questions</h2><div id="hist"></div></div>`;
   const go = async (q) => {

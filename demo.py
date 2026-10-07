@@ -33,7 +33,7 @@ print(f"        {n('SELECT COUNT(*) FROM order_items'):,} order lines -> {n('SEL
       f"({size:.0f} MB SQLite), {n('SELECT MIN(order_date) FROM orders')[:10]} to {n('SELECT MAX(order_date) FROM orders')[:10]}")
 print()
 print("Ask your data (no model)")
-for q in ["Top 5 products by revenue in 2011", "har mahine ki bikri", "kitne customers hain", "Refunds by month"]:
+for q in ["Top 5 products by revenue in 2011", "Top 5 products by gross revenue in 2011", "har mahine ki bikri", "kitne customers hain", "Refunds by month"]:
     r = nlq.answer(src, q)
     first = r["rows"][0] if r["rows"] else None
     print(f"  {q!r:42} [{r['language']}] -> {len(r['rows'])} rows, first {first}")

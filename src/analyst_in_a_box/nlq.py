@@ -91,7 +91,7 @@ DIM_WORDS = [
 ]
 
 EXAMPLES = [
-    "Sales by month", "Top 10 products by revenue", "Revenue by country",
+    "Sales by month", "Top 10 products by revenue", "Revenue by country", "Gross revenue by month",
     "How many customers do we have?", "Average order value by year",
     "Which category sells the most units?", "Refunds by month",
     "Top 5 customers in 2011", "Revenue in the last 30 days",
@@ -134,6 +134,8 @@ def _find_dim(q: str) -> str | None:
 
 def _find_metric(q: str, dim: str | None) -> str:
     count_q = bool(re.search(r"\b(how many|number of|count|total number)\b", q))
+    if re.search(r"\bgross\b", q):
+        return "gross_revenue"
     if re.search(r"\b(average order|aov|average basket|average sale|average value|avg order|mean order|average spend)\b", q):
         return "aov"
     if re.search(r"\b(refund|refunds|refunded|return|returns|returned|cancel|cancelled|cancellation|cancellations)\b", q):
@@ -249,7 +251,10 @@ def compose(
         notes.append(f"products matching '{needle}'")
 
     cancelled = metric in ("refunds", "refund_count")
-    where.insert(0, "o.status = 'cancelled'" if cancelled else "o.status = 'completed'")
+    # net revenue reads every invoice line: a cancellation line carries a negative amount, so
+    # summing per product (or per period) nets it against the sale it undid
+    if metric != "revenue":
+        where.insert(0, "o.status = 'cancelled'" if cancelled else "o.status = 'completed'")
     if item_level and dim in ("product", "category") or needle:
         where.append("p.is_product = 1")
 
@@ -270,7 +275,8 @@ def compose(
     sign = "-" if cancelled else ""
     if item_level:
         mexpr = {
-            "revenue": f"ROUND({sign}SUM(oi.line_total), 2)", "refunds": f"ROUND({sign}SUM(oi.line_total), 2)",
+            "revenue": "ROUND(SUM(oi.line_total), 2)", "gross_revenue": "ROUND(SUM(oi.line_total), 2)",
+            "refunds": f"ROUND({sign}SUM(oi.line_total), 2)",
             "units": f"{sign}SUM(oi.quantity)", "orders": "COUNT(DISTINCT o.order_id)",
             "customers": "COUNT(DISTINCT o.customer_id)", "products_count": "COUNT(DISTINCT oi.stock_code)",
             "refund_count": "COUNT(DISTINCT o.order_id)", "aov": "",
@@ -280,21 +286,24 @@ def compose(
                 "JOIN customers c ON c.customer_id = o.customer_id")
     else:
         mexpr = {
-            "revenue": "ROUND(SUM(o.total), 2)", "refunds": "ROUND(-SUM(o.total), 2)",
+            "revenue": "ROUND(SUM(o.total), 2)", "gross_revenue": "ROUND(SUM(o.total), 2)",
+            "refunds": "ROUND(-SUM(o.total), 2)",
             "orders": "COUNT(*)", "customers": "COUNT(DISTINCT o.customer_id)",
             "refund_count": "COUNT(*)", "aov": "ROUND(AVG(o.total), 2)",
         }.get(metric, "")
         base = "FROM orders o JOIN customers c ON c.customer_id = o.customer_id"
     if not mexpr:
         return None
-    mlabel = {"revenue": "revenue", "refunds": "refunded", "units": "units", "orders": "orders",
+    mlabel = {"revenue": "net_revenue", "gross_revenue": "gross_revenue", "refunds": "refunded", "units": "units", "orders": "orders",
               "customers": "customers", "products_count": "products", "refund_count": "refunds",
               "aov": "avg_order_value"}[metric]
     if metric == "units" and cancelled:
         mlabel = "units_returned"
 
     sel = f"{dexpr} AS {dlabel}, {mexpr} AS {mlabel}" if dexpr else f"{mexpr} AS {mlabel}"
-    parts = [f"SELECT {sel}", base, "WHERE " + " AND ".join(where)]
+    parts = [f"SELECT {sel}", base]
+    if where:
+        parts.append("WHERE " + " AND ".join(where))
     if dexpr:
         parts.append(f"GROUP BY {dgroup}")
         if dim in TIME_DIMS and not ranked:
@@ -305,7 +314,9 @@ def compose(
             parts.append(f"ORDER BY {mlabel} {'ASC' if asc else 'DESC'}")
             parts.append(f"LIMIT {limit or (20 if dim in ('product', 'customer') else 50)}")
     sql = "\n".join(parts)
-    what = {"revenue": "revenue from completed orders", "refunds": "value of cancelled orders (refunds)",
+    what = {"revenue": "net revenue (completed minus cancelled, matched by product and period)",
+            "gross_revenue": "gross revenue from completed orders, before cancellations",
+            "refunds": "value of cancelled orders (refunds)",
             "units": "units sold", "orders": "completed orders", "customers": "distinct customers with completed orders",
             "products_count": "distinct products sold", "refund_count": "cancelled orders",
             "aov": "average completed-order value"}[metric]

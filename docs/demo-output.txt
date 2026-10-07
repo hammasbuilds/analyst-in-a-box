@@ -2,8 +2,9 @@ Input : UCI Online Retail II, seeded sample of 2,000 customers (CC BY 4.0)
         291,897 order lines -> 15,860 orders, 2,000 customers, 4,454 products (25 MB SQLite), 2009-12-01 to 2011-12-09
 
 Ask your data (no model)
-  'Top 5 products by revenue in 2011'        [en] -> 5 rows, first ['PAPER CRAFT , LITTLE BIRDIE', 168469.6]
-  'har mahine ki bikri'                      [roman-ur] -> 25 rows, first ['2009-12', 238808.69]
+  'Top 5 products by revenue in 2011'        [en] -> 5 rows, first ['WHITE HANGING HEART T-LIGHT HOLDER', 43615.45]
+  'Top 5 products by gross revenue in 2011'  [en] -> 5 rows, first ['PAPER CRAFT , LITTLE BIRDIE', 168469.6]
+  'har mahine ki bikri'                      [roman-ur] -> 25 rows, first ['2009-12', 231572.75]
   'kitne customers hain'                     [roman-ur] -> 1 rows, first [1983]
   'Refunds by month'                         [en] -> 25 rows, first ['2009-12', 7235.94]
   write attempt 'DELETE FROM orders' -> refused: only SELECT is permitted, got Delete
@@ -16,12 +17,12 @@ Forecast (8 weeks, mint_wls, 104 weeks of history)
   product   MAE seasonal naive     477.6 | base     354.9 | bottom-up     354.9 | mint_wls     358.9
 
 Fraud and anomalies: 15,860 orders screened -> 255 alerts {'high': 24, 'medium': 81, 'low': 150} {'order': 171, 'refund': 66, 'day': 18}
-  top: Refund C502262 score 66.1: Refund of £10,953.50 is 5.7 robust deviations above the typical £16.95 refund.
+  top: Refund C502262 score 66.1: Refund of Â£10,953.50 is 5.7 robust deviations above the typical Â£16.95 refund.
 
 Customer risk (refunds of 5% or more of purchases in the 240 days after 2011-04-13, among customers who bought in that window)
   908 customers, bad rate 9.4%; Gini train 0.435 validation 0.415 test -0.194 (test: 51 customers, 2 bad)
   fairness, UK vs Other: disparate impact 0.843, four-fifths flag False
   scored now: 1983 customers, 1675 approve at cut-off 539
 
-Workflow: credit limit to £9,000 needs gates ['manager', 'owner']
+Workflow: credit limit to Â£9,000 needs gates ['manager', 'owner']
   status executed; audit entries 5; chain True
