@@ -13,7 +13,8 @@ Connect a database or drop in a spreadsheet and you can ask it questions in Engl
 | **Forecasts** | Weekly units per product and category, hierarchical (total, category, product), reconciled so the numbers add up, Croston for intermittent demand, a rolling-origin backtest against seasonal naive for every series and method. |
 | **Fraud and anomalies** | Robust z-score (median and MAD) and rule checks on orders and refunds, plus daily revenue and order-count spikes. Every alert lists its reasons with the numbers behind them. Open a review ticket or dismiss. |
 | **Customer risk** | WoE/IV scorecard with points and reason codes per customer, Gini and Brier on train, validation and test, calibration, a fairness audit by country and tenure. Raise a credit-limit ticket from a customer. |
-| **Workflows** | Tickets for refunds, credit-limit changes and fraud reviews. Approval gates by amount, four-eyes, roles, a state machine, and a SHA-256 hash-chained audit trail you can verify. |
+| **Workflows** | Tickets for refunds, credit-limit changes and fraud reviews. PIN sign-in, approval gates by amount, four-eyes, roles, a state machine, and a SHA-256 hash-chained audit trail with a signed head and a cross-check against the live tables. |
+| **Export** | Any query result as a CSV (up to 50,000 rows) and the audit trail as a CSV. Text that starts with `=`, `+`, `-` or `@` is neutralised so a spreadsheet will not run it. |
 | **Dashboard** | KPI cards with change against the previous 30 days, revenue by month, country, product and category. |
 
 ## Run it
@@ -22,7 +23,7 @@ Connect a database or drop in a spreadsheet and you can ask it questions in Engl
 uv run analyst-in-a-box        # starts the server and opens http://127.0.0.1:8780
 ```
 
-or double-click `run.bat` (or the "Analyst-in-a-Box" desktop shortcut). The first run builds the sample database in about ten seconds. Options: `--port`, `--no-browser`, `--db FILE`. Data lives in `~/.analyst-in-a-box` (set `ANALYST_HOME` to move it). Python 3.11+ and [uv](https://docs.astral.sh/uv/); everything runs on the CPU and offline.
+or double-click `run.bat` (or the "Analyst-in-a-Box" desktop shortcut). The first run builds the sample database in about ten seconds. Options: `--port`, `--no-browser`, `--db FILE`, `--reset-pin "Name"`. Data lives in `~/.analyst-in-a-box` (set `ANALYST_HOME` to move it). Python 3.11+ and [uv](https://docs.astral.sh/uv/); everything runs on the CPU and offline.
 
 Optional language model (never required), set before launching:
 
@@ -32,15 +33,17 @@ ANALYST_LLM=anthropic  ANTHROPIC_API_KEY=...                       # ANALYST_LLM
 ANALYST_LLM=openai     OPENAI_API_KEY=...  ANALYST_OPENAI_BASE_URL=...
 ```
 
+**Signing in.** Reading, asking and exporting need no sign-in. Anything that changes state (tickets and their approvals, dismissing alerts, uploads, adding or removing a data source) needs a name and a PIN. On the first start after this version the app gives each of the four people a random 8-character PIN, stores only salted PBKDF2 hashes, and writes the PINs once to `pins.txt` in the data folder: hand each person their own line and delete the file. A lost PIN is replaced with `analyst-in-a-box --reset-pin "Bilal Ahmed"`; anyone can change their own PIN from the sidebar. Five wrong PINs lock that name for 60 seconds.
+
 PostgreSQL needs the optional driver: `uv sync --extra postgres`.
 
 Checks:
 
 ```
-uv run pytest -q                      # 70 tests
+uv run pytest -q                      # 152 tests
 uv run ruff check .
 uv run python demo.py                 # offline end-to-end demo (output below)
-uv run --with playwright python scripts/ui_tour.py http://127.0.0.1:8791 docs/screenshots   # drives the real UI
+uv run --with playwright python scripts/ui_tour.py http://127.0.0.1:8791 docs/screenshots PINS_FILE   # drives the real UI
 ```
 
 ## Input / Output
@@ -87,6 +90,7 @@ All from the real UI, produced by `scripts/ui_tour.py`, which fails on any unexp
 | ![Alerts](docs/screenshots/07-alerts.png) **Fraud and anomalies** with reasons | ![Risk](docs/screenshots/08-risk.png) **Customer risk**: scorecard, fairness panel |
 | ![Customer](docs/screenshots/09-risk-customer.png) **Customer**: points, reason codes, credit-limit ticket | ![Workflows](docs/screenshots/11-ticket-approved.png) **Workflows**: gates, decisions, audit |
 | ![Data](docs/screenshots/02-data.png) **Data**: sources, upload, schema | ![Dark](docs/screenshots/12-dashboard-dark.png) **Dark mode** (phone layout: [13](docs/screenshots/13-mobile-ask.png)) |
+| ![Sign in](docs/screenshots/14-sign-in.png) **Sign in** with a name and PIN before acting | ![Audit](docs/screenshots/15-audit-verified.png) **Audit**: Verify checks the chain, the signed head and every ticket against the trail |
 
 ## How it works
 
@@ -108,10 +112,10 @@ flowchart LR
 | Layer | Enforced by | Attacked in |
 |---|---|---|
 | 1. Prompt | tells a model to write one SELECT | never relied on |
-| 2. Validator | sqlglot parses the statement: exactly one, a SELECT, no write nodes anywhere (a `DELETE` inside a CTE is caught), no `PRAGMA`/`ATTACH`, no `load_extension`/`readfile`, no `sqlite_*` catalogue, unknown tables rejected, `LIMIT` injected and clamped | `tests/test_sqlsafe.py` |
-| 3. Connection | SQLite opened with `mode=ro`, `PRAGMA query_only`, an authoriser that denies everything except reads, a wall-clock deadline and a row cap. PostgreSQL runs in a read-only transaction with a statement timeout. | the same tests send writes straight to the runner, skipping layer 2 |
+| 2. Validator | sqlglot parses the statement: exactly one, a SELECT, no write nodes anywhere (a `DELETE` inside a CTE is caught), no `PRAGMA`/`ATTACH`, no `load_extension`/`readfile`, no `sqlite_*` catalogue (also behind a `main.` prefix), unknown tables rejected, statements over 20,000 characters refused, `LIMIT` injected and clamped | `tests/test_sqlsafe.py`, `tests/test_security.py` |
+| 3. Connection | SQLite opened with `mode=ro`, `PRAGMA query_only`, an authoriser that denies everything except reads, a wall-clock deadline, a row cap, and SQLite's own size limits (1 MB per string, expression depth 200, 20 compound selects, no attached databases). Text cells are cut at 5,000 characters, a result at 4 MB, blobs become `<n byte blob>` and NaN/Infinity become null. PostgreSQL runs in a read-only transaction with a statement timeout. | the same tests send writes straight to the runner, skipping layer 2 |
 
-Layers 2 and 3 are independent; the tests break each alone. The app never writes to your data; the only business-table writes are building the canonical tables from an upload you map.
+Layers 2 and 3 are independent; the tests break each alone, with 36 hostile statements (stacked statements, comment tricks, Unicode lookalike semicolons, `ATTACH`, `PRAGMA`, `load_extension` in three spellings, CTE writes, `VACUUM INTO`, catalogue reads, a 5,000-deep parenthesis, a 30,000-item `IN` list), a 900 MB `printf` string bomb and a four-way cross join that must time out. The app never writes to your data; the only business-table writes are building the canonical tables from an upload you map.
 
 ### What is reused from the other repos
 
@@ -141,7 +145,11 @@ The data has no loan or payment defaults, so "bad" is a proxy: in the 240 days a
 
 ### Approval policy
 
-Refund up to £100: one manager. Over £100 up to £1,000: two different managers. Over £1,000: a manager then the owner. Credit limit decrease: one manager; increase of up to 25% and to no more than £5,000: one manager; anything larger, or any increase for a customer the scorecard declines (decided by the server, not the caller): a manager then the owner. Nobody approves their own ticket or approves twice. A refund cannot exceed what is left of its order. Executing writes to the app's own ledger and credit-limit table. There is no login: you choose who you are acting as, and the rules are enforced against that name.
+Refund up to £100: one manager. Over £100 up to £1,000: two different managers. Over £1,000: a manager then the owner. Credit limit decrease: one manager; increase of up to 25% and to no more than £5,000: one manager; anything larger, or any increase for a customer the scorecard declines (decided by the server, not the caller): a manager then the owner. Nobody approves their own ticket or approves twice. A refund cannot exceed what is left of its order, counting refunds already paid and tickets still open, and the order is checked again when the ticket is executed. Executing writes to the app's own ledger and credit-limit table. Who is acting comes from the signed-in session, never from the request body: a request that names someone else is refused with 403. Approvals, executions and the ledger are serialised and backed by unique indexes, so ten simultaneous approvals by one manager count once and a ticket pays once.
+
+### The audit trail
+
+Each entry's SHA-256 covers the previous hash, so editing or deleting a row breaks every hash after it. A chain alone cannot see its own tail cut off or a whole-chain recompute, so the head (count, last id, last hash) is also written, HMAC-signed, to `analyst.sqlite3.audit-head` with the key in `analyst.sqlite3.audit-key`, outside the database. **Verify** reports one of `ok`, `shortened` (tail or whole trail deleted), `rewritten` (chain recomputed), `forged` (head file altered) or `missing`. It then checks every ticket against the trail (status, requester, amount, gates, approvals), every ledger row and every credit limit against an audited execution, which catches `UPDATE tickets SET status='approved'` straight into the file. Each case is a test. Older databases get their head file on the first start if their chain verifies.
 
 ## What the checks show
 
@@ -149,7 +157,7 @@ Every number is printed by the code in this repository.
 
 | Check | Result |
 |---|---|
-| Tests | 70 passing, ruff clean. API tests hit every endpoint; the safety tests attack both layers separately; workflow tests cover gates, roles, four-eyes, illegal transitions, over-refund and a tampered or deleted audit row. |
+| Tests | 152 passing, ruff clean. API tests hit every endpoint; `test_security.py` (82 tests) holds every attack found in the review as a regression test; workflow tests cover gates, roles, four-eyes, illegal transitions and over-refund. |
 | Hermetic | Tests build a 700-customer slice of the sample in a temp directory and never touch `~/.analyst-in-a-box`. |
 | Forecast | Totals disagree before reconciling and add up after; 38 of 59 series beat seasonal naive on the backtest. At the total, MinT-weighted MAE is 11,141 units a week against 15,462 for seasonal naive. |
 | Fraud | 255 alerts on 15,860 orders (24 high, 81 medium, 150 low). A planted £250,000 manual-line order in a copy of the data is flagged high (test). |
@@ -164,8 +172,26 @@ Every number is printed by the code in this repository.
 - **Forecasts cover units, not revenue**, and only products that sold at least once; the next 8 weeks cross the Christmas gap, which with two years of history is one repeat. The total can beat seasonal naive while individual categories do not.
 - **The built-in parser is not a language model.** It composes revenue, orders, customers, units, refunds, averages, rankings, time breakdowns, country, category and date filters; "compare 2010 with 2011" or free-form joins need a model. When it cannot map a question it says so rather than guess. Roman Urdu is a glossary of about 60 business words.
 - **PostgreSQL** supports Ask and the schema browser only; the dashboard, forecasts, fraud and risk need the SQLite business tables. It was not tested against a live server in this build.
-- **No authentication, one machine.** "Acting as" is a convenience, not security.
+- **Sign-in is PINs for a fixed list of four people on one machine**, not single sign-on: users cannot be added from the UI, PINs are short, and sessions last 12 hours. Anyone with file access to the data folder can still edit the database, the head file and its key; the audit checks make that detectable only against someone without all three. Locking a name after five failures also lets a stranger lock a person out for a minute.
+- **Uploads have limits, not quotas**: 40 MB, 1,000,000 rows, 500 columns, 100,000 characters per cell, 400 MB unpacked for a workbook; the uploads database itself is unbounded.
+- **PostgreSQL URLs are connected to as given**, so on a shared network the "add a source" box can probe internal hosts. It needs a manager sign-in and is meant for one trusted machine.
 - **No payment data.** Payments and categories are derived (see The data).
+
+## The 2026-10-07 security review
+
+A hostile read of the code, each finding reproduced before it was fixed, each fix pinned by a test in `tests/test_security.py`. Work notes: [docs/REVIEW.md](docs/REVIEW.md).
+
+- **Four-eyes was bypassable by anyone** (high): the acting name came from a drop-down and the request body, so one person could raise a refund as Amna and approve it as Bilal and Sana. Now PIN sign-in and a server-side session.
+- **Over-refund** (high): three tickets for the full 426.30 of one order were all approved and executed (1,278.90 paid). Open tickets now count against the order and execute re-checks it.
+- **Approval race** (high): eight simultaneous approvals by one manager were all recorded, which could fill both gates of a two-manager refund. State changes are serialised and the database has unique indexes.
+- **Audit trail** (medium): deleting the last entries, or recomputing the chain after an edit, verified as intact, and editing the tickets table directly was invisible. Signed head file and a cross-check against the live tables.
+- **String bomb** (medium): `printf('%.*c', 900000000, 'x')` built a 900 MB string in 6.6 s and was returned to the browser. SQLite length limit, cell and result caps.
+- **CSRF and DNS rebinding** (medium): a cross-origin upload or JSON write with a foreign `Host` was accepted. Origin, Host and Sec-Fetch-Site checks, body-size limits, CSP and the usual headers.
+- **Uploads** (medium): a 130 KB cell crashed with a 500; a decompression-bomb workbook was unpacked; an 18-digit id was rounded to the nearest float (123456789012345678 became ...680) and `00123` became 123; `NaN` and an out-of-range integer raised. All are 400s or are stored faithfully now.
+- **NaN / Infinity amounts** (medium): `NaN` passed every comparison in the ticket checks. Amounts must be finite and below 1e12.
+- **Smaller**: the app's own database could be added as a data source (it holds the PIN hashes); a table name with a quote broke the schema browser; a `main.sqlite_master` reference leaned on a second layer; a page that finished loading after you had moved on painted over the new one.
+
+No bypass of the read-only guarantee was found: every attack above was refused by layer 2 or 3, and the authoriser alone stopped every write.
 
 ## Problems hit while building this
 

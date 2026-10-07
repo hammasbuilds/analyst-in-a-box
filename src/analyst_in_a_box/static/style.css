@@ -153,3 +153,8 @@ details > summary { cursor: pointer; font-weight: 600; margin: 6px 0; }
   .side .foot label { display: none; }
   main { padding: 16px 16px 60px; }
 }
+a.btn { text-decoration: none; display: inline-block; }
+.side .foot input[type=password], .side .foot select { width: 100%; }
+.side .foot form { min-width: 0; }
+.side .foot input, .side .foot select { box-sizing: border-box; max-width: 100%; }
+.side .foot .small { overflow-wrap: anywhere; }

@@ -7,16 +7,18 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (
     appdb,
+    auth,
     canon,
     config,
     dashboard,
+    exporting,
     forecasting,
     fraud,
     llm,
@@ -28,6 +30,10 @@ from . import (
 )
 
 STATIC = Path(__file__).parent / "static"
+COOKIE = "aib_session"
+LOOPBACK = {"127.0.0.1", "localhost", "[::1]", "::1", "testserver"}
+CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 _ERRORS = (
     sources.SourceError, sqlsafe.QueryError, workflows.WorkflowError,
     forecasting.ForecastError, risk.RiskError,
@@ -56,10 +62,25 @@ class MapIn(BaseModel):
     mapping: dict[str, str]
 
 
+class SqlExportIn(BaseModel):
+    sql: str
+    source_id: int | None = None
+
+
+class LoginIn(BaseModel):
+    name: str
+    pin: str
+
+
+class PinIn(BaseModel):
+    old_pin: str
+    new_pin: str
+
+
 class TicketIn(BaseModel):
     kind: str
     title: str
-    requested_by: str
+    requested_by: str = ""  # ignored: the signed-in user raises the ticket
     customer_id: str | None = None
     order_id: str | None = None
     amount: float | None = None
@@ -68,29 +89,35 @@ class TicketIn(BaseModel):
 
 
 class ActIn(BaseModel):
-    actor: str
+    actor: str = ""  # ignored; kept so older clients still validate
     comment: str = ""
 
 
 class AlertTicketIn(BaseModel):
-    requested_by: str
+    requested_by: str = ""
     comment: str = ""
 
 
 class DismissIn(BaseModel):
-    actor: str
+    actor: str = ""
     note: str = ""
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
+def create_app(db_path: str | Path | None = None, allowed_hosts: list[str] | None = None) -> FastAPI:
     path = Path(db_path) if db_path else config.app_db_path()
     appdb.init(path)
     boot = appdb.connect(path)
+    new_pins: dict[str, str] = {}
     try:
         sources.ensure_builtin(boot)
+        new_pins = auth.ensure_credentials(boot, path.parent / "pins.txt")
     finally:
         boot.close()
     app = FastAPI(title="Analyst-in-a-Box", version="0.1.0")
+    app.state.new_pins = new_pins
+    app.state.pins_file = path.parent / "pins.txt"
+    hosts = {h.lower() for h in LOOPBACK | set(allowed_hosts or [])}
+    any_host = "*" in hosts
     fraud_cache: dict[tuple, dict[str, Any]] = {}
 
     def get_con() -> Iterator[sqlite3.Connection]:
@@ -101,6 +128,62 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             con.close()
 
     Con = Depends(get_con)
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        """Refuse foreign Host headers (DNS rebinding), cross-site writes (CSRF) and oversize bodies."""
+        host = (request.headers.get("host") or "").lower()
+        hostname = host.split("]")[0] + "]" if host.startswith("[") else host.rsplit(":", 1)[0]
+        if not any_host and hostname not in hosts:
+            return JSONResponse({"detail": f"host {host!r} is not allowed"}, status_code=403)
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            origin = request.headers.get("origin")
+            if origin and origin.split("://", 1)[-1].lower() != host:
+                return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
+            limit = (config.MAX_UPLOAD_BYTES + 1024 * 1024 if request.url.path == "/api/upload"
+                     else config.MAX_JSON_BODY)
+            try:
+                declared = int(request.headers.get("content-length") or 0)
+            except ValueError:
+                declared = 0
+            if declared > limit:
+                return JSONResponse(
+                    {"detail": f"request body is larger than {limit // 1024 // 1024} MB"},
+                    status_code=413)
+        resp = await call_next(request)
+        resp.headers.setdefault("Content-Security-Policy", CSP)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        if request.url.path.startswith("/api/"):
+            resp.headers.setdefault("Cache-Control", "no-store")
+        return resp
+
+    async def _auth_error(request: Request, exc: Exception) -> JSONResponse:
+        status = exc.status if isinstance(exc, auth.AuthError) else 401
+        return JSONResponse({"detail": str(exc)}, status_code=status)
+
+    app.add_exception_handler(auth.AuthError, _auth_error)
+
+    def me(request: Request, con: sqlite3.Connection = Con) -> str:
+        """The signed-in person, from the session cookie. Never from the request body."""
+        name = auth.user_for(con, request.cookies.get(COOKIE))
+        if not name:
+            raise auth.AuthError("sign in first (choose your name and enter your PIN)")
+        return name
+
+    Me = Depends(me)
+
+    def need_manager(name: str) -> None:
+        if workflows.RANK[workflows.user_role(name)] < workflows.RANK["manager"]:
+            raise HTTPException(403, "changing data sources needs a manager or the owner")
+
+    def same(claimed: str, name: str) -> None:
+        """A body that names someone else is an impersonation attempt, not a typo."""
+        if claimed and claimed != name:
+            raise HTTPException(403, f"you are signed in as {name}; you cannot act as {claimed}")
 
     async def _bad_request(request: Request, exc: Exception) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -137,10 +220,31 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def health() -> dict[str, Any]:
         return {"ok": True}
 
+    @app.post("/api/login")
+    def login(body: LoginIn, response: Response, con: sqlite3.Connection = Con) -> dict[str, Any]:
+        token = auth.login(con, body.name, body.pin)
+        response.set_cookie(COOKIE, token, httponly=True, samesite="strict",
+                            max_age=auth.SESSION_HOURS * 3600, path="/")
+        return {"name": body.name, "role": workflows.user_role(body.name)}
+
+    @app.post("/api/logout")
+    def logout(request: Request, response: Response, con: sqlite3.Connection = Con) -> dict[str, Any]:
+        auth.logout(con, request.cookies.get(COOKIE))
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
+
+    @app.post("/api/me/pin")
+    def change_pin(body: PinIn, name: str = Me, con: sqlite3.Connection = Con) -> dict[str, Any]:
+        auth.change_pin(con, name, body.old_pin, body.new_pin)
+        return {"ok": True, "note": "you were signed out everywhere; sign in with the new PIN"}
+
     @app.get("/api/state")
-    def state(con: sqlite3.Connection = Con) -> dict[str, Any]:
+    def state(request: Request, con: sqlite3.Connection = Con) -> dict[str, Any]:
         src = active(con)
+        who = auth.user_for(con, request.cookies.get(COOKIE))
         return {
+            "me": {"name": who, "role": workflows.user_role(who)} if who else None,
+            "pins_file": app.state.pins_file.exists(),
             "llm": llm.status(), "source": {k: src[k] for k in ("id", "name", "kind")},
             "canonical": sources.is_canonical(src), "users": workflows.USERS,
             "policy": workflows.POLICY, "max_rows": config.MAX_ROWS,
@@ -152,19 +256,23 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return sources.list_sources(con)
 
     @app.post("/api/sources")
-    def add_source(body: SourceIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
+    def add_source(body: SourceIn, name: str = Me, con: sqlite3.Connection = Con) -> dict[str, Any]:
+        need_manager(name)
         s = sources.add_source(con, body.kind, body.location, body.name)
         sources.activate(con, s["id"])
+        appdb.audit(con, name, "source.added", None, {"name": s["name"], "kind": s["kind"]})
         return {"id": s["id"], "name": s["name"], "kind": s["kind"]}
 
     @app.post("/api/sources/{source_id}/activate")
-    def activate(source_id: int, con: sqlite3.Connection = Con) -> dict[str, Any]:
+    def activate(source_id: int, name: str = Me, con: sqlite3.Connection = Con) -> dict[str, Any]:
         sources.activate(con, source_id)
         return {"ok": True}
 
     @app.delete("/api/sources/{source_id}")
-    def remove(source_id: int, con: sqlite3.Connection = Con) -> dict[str, Any]:
+    def remove(source_id: int, name: str = Me, con: sqlite3.Connection = Con) -> dict[str, Any]:
+        need_manager(name)
         sources.remove_source(con, source_id)
+        appdb.audit(con, name, "source.removed", None, {"id": source_id})
         return {"ok": True}
 
     @app.get("/api/schema")
@@ -174,16 +282,29 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 "canonical": sources.is_canonical(src)}
 
     @app.post("/api/upload")
-    async def upload(file: UploadFile = File(...), con: sqlite3.Connection = Con) -> dict[str, Any]:
-        data = await file.read()
-        return sources.import_upload(con, file.filename or "upload.csv", data)
+    async def upload(file: UploadFile = File(...), name: str = Me,
+                     con: sqlite3.Connection = Con) -> dict[str, Any]:
+        need_manager(name)
+        chunks, size = [], 0
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > config.MAX_UPLOAD_BYTES:  # stop reading; do not hold a gigabyte in memory
+                raise sources.SourceError(
+                    f"file is larger than {config.MAX_UPLOAD_BYTES // 1024 // 1024} MB")
+            chunks.append(chunk)
+        res = sources.import_upload(con, file.filename or "upload.csv", b"".join(chunks))
+        appdb.audit(con, name, "source.uploaded", None, {
+            "file": (file.filename or "")[:120], "tables": [t["table"] for t in res["tables"]]})
+        return res
 
     @app.get("/api/sales-fields")
     def sales_fields() -> dict[str, str]:
         return sources.SALES_FIELDS
 
     @app.post("/api/sources/{source_id}/map-sales")
-    def map_sales(source_id: int, body: MapIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
+    def map_sales(source_id: int, body: MapIn, name: str = Me,
+                  con: sqlite3.Connection = Con) -> dict[str, Any]:
+        need_manager(name)
         src = active(con, source_id)
         counts = sources.map_sales(src, body.table, body.mapping)
         fraud_cache.clear()
@@ -212,6 +333,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         res |= {"ok": True, "mode": "edited", "question": None}
         log_query(con, res)
         return res
+
+    @app.post("/api/export")
+    def export_csv(body: SqlExportIn, con: sqlite3.Connection = Con) -> Response:
+        """The result of one read-only query as a CSV that is safe to open in a spreadsheet."""
+        src = active(con, body.source_id)
+        res = sources.query(src, body.sql, max_rows=config.EXPORT_ROWS, max_chars=50_000_000)
+        text = "\ufeff" + exporting.to_csv(res["columns"], res["rows"])
+        return Response(text.encode("utf-8"), media_type="text/csv; charset=utf-8", headers={
+            "Content-Disposition": 'attachment; filename="analyst-export.csv"',
+            "X-Rows": str(len(res["rows"])), "X-Truncated": str(res["truncated"]).lower()})
 
     @app.get("/api/ask/examples")
     def examples() -> list[str]:
@@ -255,8 +386,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return {"summary": total, "matching": len(rows), "alerts": rows[: max(1, min(limit, 500))]}
 
     @app.post("/api/alerts/{key:path}/dismiss")
-    def dismiss(key: str, body: DismissIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
-        workflows.user_role(body.actor)
+    def dismiss(key: str, body: DismissIn, name: str = Me,
+                con: sqlite3.Connection = Con) -> dict[str, Any]:
+        same(body.actor, name)
         if not any(a["key"] == key for a in screened(active(con))["alerts"]):
             raise workflows.WorkflowError(f"no alert {key}")
         con.execute(
@@ -264,11 +396,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             "ON CONFLICT(alert_key) DO UPDATE SET status=excluded.status, note=excluded.note, at=excluded.at",
             (key, "dismissed", None, body.note, appdb.now()))
         con.commit()
-        appdb.audit(con, body.actor, "alert.dismissed", None, {"alert": key, "note": body.note})
+        appdb.audit(con, name, "alert.dismissed", None, {"alert": key, "note": body.note})
         return {"ok": True}
 
     @app.post("/api/alerts/{key:path}/ticket")
-    def alert_ticket(key: str, body: AlertTicketIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
+    def alert_ticket(key: str, body: AlertTicketIn, name: str = Me,
+                     con: sqlite3.Connection = Con) -> dict[str, Any]:
+        same(body.requested_by, name)
         src = active(con)
         alert = next((a for a in screened(src)["alerts"] if a["key"] == key), None)
         if alert is None:
@@ -278,7 +412,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         why = "; ".join(r["text"] for r in alert["reasons"])
         t = workflows.create(
             con, kind="fraud_review", title=f"Review {alert['subject'].lower()}",
-            requested_by=body.requested_by, customer_id=alert["customer_id"],
+            requested_by=name, customer_id=alert["customer_id"],
             order_id=alert["order_id"], amount=abs(alert["amount"]),
             reason=(body.comment + " | " if body.comment else "") + why,
             payload={"alert_key": key, "score": alert["score"]})
@@ -326,7 +460,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return check
 
     @app.post("/api/tickets")
-    def new_ticket(body: TicketIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
+    def new_ticket(body: TicketIn, name: str = Me, con: sqlite3.Connection = Con) -> dict[str, Any]:
+        same(body.requested_by, name)
         src = active(con)
         payload = dict(body.payload)
         if body.kind == "credit_limit_change" and body.customer_id and sources.is_canonical(src):
@@ -334,7 +469,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             payload["risk_decision"] = c["decision"] if c else None
             payload["risk_score"] = c["score"] if c else None
         return workflows.create(
-            con, kind=body.kind, title=body.title, requested_by=body.requested_by,
+            con, kind=body.kind, title=body.title, requested_by=name,
             customer_id=body.customer_id, order_id=body.order_id, amount=body.amount,
             reason=body.reason, payload=payload, order_check=order_room(src))
 
@@ -347,20 +482,28 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return workflows.get(con, tid)
 
     @app.post("/api/tickets/{tid}/approve")
-    def approve(tid: int, body: ActIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
-        return workflows.approve(con, tid, body.actor, body.comment)
+    def approve(tid: int, body: ActIn, name: str = Me,
+               con: sqlite3.Connection = Con) -> dict[str, Any]:
+        same(body.actor, name)
+        return workflows.approve(con, tid, name, body.comment)
 
     @app.post("/api/tickets/{tid}/reject")
-    def reject(tid: int, body: ActIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
-        return workflows.reject(con, tid, body.actor, body.comment)
+    def reject(tid: int, body: ActIn, name: str = Me,
+              con: sqlite3.Connection = Con) -> dict[str, Any]:
+        same(body.actor, name)
+        return workflows.reject(con, tid, name, body.comment)
 
     @app.post("/api/tickets/{tid}/cancel")
-    def cancel(tid: int, body: ActIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
-        return workflows.cancel(con, tid, body.actor)
+    def cancel(tid: int, body: ActIn, name: str = Me,
+              con: sqlite3.Connection = Con) -> dict[str, Any]:
+        same(body.actor, name)
+        return workflows.cancel(con, tid, name)
 
     @app.post("/api/tickets/{tid}/execute")
-    def execute(tid: int, body: ActIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
-        return workflows.execute(con, tid, body.actor)
+    def execute(tid: int, body: ActIn, name: str = Me,
+               con: sqlite3.Connection = Con) -> dict[str, Any]:
+        same(body.actor, name)
+        return workflows.execute(con, tid, name)
 
     @app.get("/api/audit")
     def audit_log(limit: int = 100, con: sqlite3.Connection = Con) -> list[dict[str, Any]]:
@@ -370,7 +513,24 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/audit/verify")
     def audit_verify(con: sqlite3.Connection = Con) -> dict[str, Any]:
-        return appdb.verify_audit(con)
+        """The hash chain, the signed head kept outside the database, and a cross-check of the
+        tickets, approvals, ledger and credit limits against what the trail says happened."""
+        res = appdb.verify_audit(con)
+        rec = workflows.reconcile(con)
+        res["reconcile"] = rec
+        res["problems"] = res["problems"] + rec["problems"]
+        res["ok"] = res["ok"] and not rec["problems"]
+        return res
+
+    @app.get("/api/audit/export")
+    def audit_export(con: sqlite3.Connection = Con) -> Response:
+        rows = con.execute("SELECT id, at, actor, action, ticket_id, detail, prev_hash, hash "
+                           "FROM audit ORDER BY id").fetchall()
+        text = "\ufeff" + exporting.to_csv(
+            ["id", "at", "actor", "action", "ticket_id", "detail", "prev_hash", "hash"],
+            [list(r) for r in rows])
+        return Response(text.encode("utf-8"), media_type="text/csv; charset=utf-8", headers={
+            "Content-Disposition": 'attachment; filename="audit-trail.csv"'})
 
     @app.get("/api/ledger")
     def ledger(con: sqlite3.Connection = Con) -> dict[str, Any]:

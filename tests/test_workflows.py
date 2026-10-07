@@ -55,7 +55,7 @@ def test_four_eyes_and_role_rules(con):
     wf.approve(con, t["id"], "Sana Malik")
     with pytest.raises(wf.WorkflowError, match="already"):
         wf.approve(con, t["id"], "Sana Malik")
-    big = refund(con, 450, by="Sana Malik")  # 2 gates (<=1000)
+    big = refund(con, 150, by="Sana Malik")  # 2 gates (<=1000)
     with pytest.raises(wf.WorkflowError, match="manager"):
         wf.approve(con, big["id"], "Amna Khan")  # staff cannot approve
 

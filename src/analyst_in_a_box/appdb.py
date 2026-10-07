@@ -6,7 +6,10 @@ app never writes to a business database except to build the canonical tables fro
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
+import secrets
 import sqlite3
 import threading
 from datetime import UTC, datetime
@@ -35,12 +38,18 @@ CREATE TABLE IF NOT EXISTS credit_limits (
 CREATE TABLE IF NOT EXISTS ledger (
     id INTEGER PRIMARY KEY, kind TEXT NOT NULL, customer_id TEXT, order_id TEXT, amount REAL,
     ticket_id INTEGER, at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS credentials (
+    name TEXT PRIMARY KEY, salt TEXT NOT NULL, pin_hash TEXT NOT NULL, changed_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS query_log (
     id INTEGER PRIMARY KEY, at TEXT NOT NULL, question TEXT, sql TEXT, mode TEXT, rows INTEGER,
     ok INTEGER, note TEXT);
 """
 
-_lock = threading.RLock()
+LOCK = threading.RLock()
+_lock = LOCK
 
 
 def now() -> str:
@@ -58,7 +67,20 @@ def init(path: str | Path) -> None:
     con = connect(path)
     try:
         con.executescript(SCHEMA)
+        # one approval per person per ticket and one ledger row per executed ticket, enforced by
+        # the database as well as by the code (an older file with duplicates just skips them)
+        for ddl in (
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_approvals_once ON approvals(ticket_id, approver) "
+            "WHERE decision='approve'",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_ledger_ticket ON ledger(ticket_id) "
+            "WHERE ticket_id IS NOT NULL",
+        ):
+            try:
+                con.execute(ddl)
+            except sqlite3.IntegrityError:
+                pass
         con.commit()
+        adopt_anchor(con)
     finally:
         con.close()
 
@@ -102,16 +124,109 @@ def audit(
             (at, actor, action, ticket_id, d, prev, h),
         )
         con.commit()
-        return int(cur.lastrowid or 0)
+        new_id = int(cur.lastrowid or 0)
+        n = con.execute("SELECT COUNT(*) FROM audit").fetchone()[0]
+        _write_anchor(con, n, new_id, h)
+        return new_id
 
 
-def verify_audit(con: sqlite3.Connection) -> dict[str, Any]:
+# ---- the anchor: a signed copy of the chain head kept OUTSIDE the database --------------------
+# A hash chain alone cannot see its own tail being cut off, or the whole chain being recomputed
+# after an edit. The head (count, last id, last hash) is also written to a side file next to the
+# database, signed with a key kept in a second file; verify_audit compares the two.
+
+
+def _db_file(con: sqlite3.Connection) -> Path | None:
+    row = con.execute("PRAGMA database_list").fetchone()
+    return Path(row[2]) if row and row[2] else None
+
+
+def _key(db: Path) -> bytes:
+    kp = db.with_name(db.name + ".audit-key")
+    if not kp.exists():
+        tmp = kp.with_suffix(".tmp")
+        tmp.write_text(secrets.token_hex(32))
+        os.replace(tmp, kp)
+    return bytes.fromhex(kp.read_text().strip())
+
+
+def _mac(db: Path, count: int, last_id: int, h: str) -> str:
+    return hmac.new(_key(db), f"{count}|{last_id}|{h}".encode(), "sha256").hexdigest()
+
+
+def _write_anchor(con: sqlite3.Connection, count: int, last_id: int, h: str) -> None:
+    db = _db_file(con)
+    if db is None:
+        return
+    body = {"count": count, "last_id": last_id, "hash": h, "mac": _mac(db, count, last_id, h)}
+    ap = db.with_name(db.name + ".audit-head")
+    tmp = ap.with_suffix(".tmp")
+    tmp.write_text(json.dumps(body))
+    os.replace(tmp, ap)
+
+
+def adopt_anchor(con: sqlite3.Connection) -> None:
+    """Start anchoring a database that has audit rows but no anchor yet (an older install), but
+    only if its chain verifies right now; otherwise leave it absent so verify reports it."""
+    db = _db_file(con)
+    if db is None or db.with_name(db.name + ".audit-head").exists():
+        return
+    res = _walk_chain(con)
+    if res["ok"] and res["entries"]:
+        last = con.execute("SELECT id, hash FROM audit ORDER BY id DESC LIMIT 1").fetchone()
+        _write_anchor(con, res["entries"], last[0], last[1])
+
+
+def _walk_chain(con: sqlite3.Connection) -> dict[str, Any]:
     prev = GENESIS
     n = 0
     for r in con.execute("SELECT * FROM audit ORDER BY id"):
         n += 1
         expect = _digest(prev, r["at"], r["actor"], r["action"], r["ticket_id"], r["detail"])
         if r["prev_hash"] != prev or r["hash"] != expect:
-            return {"ok": False, "entries": n, "first_bad_id": r["id"]}
+            return {"ok": False, "entries": n, "first_bad_id": r["id"], "head": None}
         prev = r["hash"]
     return {"ok": True, "entries": n, "first_bad_id": None, "head": prev}
+
+
+def verify_audit(con: sqlite3.Connection) -> dict[str, Any]:
+    """Walk the chain, then compare its head with the signed anchor kept outside the database.
+    `anchor` is one of ok, missing, forged, shortened, rewritten, or n/a (in-memory database)."""
+    res = _walk_chain(con)
+    res["anchor"] = "n/a"
+    res["problems"] = []
+    if not res["ok"]:
+        res["problems"].append(f"the chain breaks at entry {res['first_bad_id']}")
+    db = _db_file(con)
+    if db is None:
+        return res
+    ap = db.with_name(db.name + ".audit-head")
+    if not ap.exists():
+        res["anchor"] = "missing" if res["entries"] else "ok"
+        if res["entries"]:
+            res["problems"].append("the signed head file is missing, so a cut-off tail cannot be ruled out")
+    else:
+        try:
+            a = json.loads(ap.read_text())
+            valid = hmac.compare_digest(
+                str(a["mac"]), _mac(db, int(a["count"]), int(a["last_id"]), str(a["hash"])))
+        except (ValueError, KeyError, TypeError, OSError):
+            valid = False
+        if not valid:
+            res["anchor"] = "forged"
+            res["problems"].append("the signed head file does not verify")
+        else:
+            row = con.execute("SELECT hash FROM audit WHERE id=?", (a["last_id"],)).fetchone()
+            upto = con.execute("SELECT COUNT(*) FROM audit WHERE id<=?", (a["last_id"],)).fetchone()[0]
+            if row is None or upto != a["count"]:
+                res["anchor"] = "shortened"
+                res["problems"].append(
+                    f"the signed head says {a['count']} entries up to id {a['last_id']}; "
+                    f"the database has {upto}")
+            elif row[0] != a["hash"]:
+                res["anchor"] = "rewritten"
+                res["problems"].append(f"entry {a['last_id']} no longer has the hash that was signed")
+            else:
+                res["anchor"] = "ok"
+    res["ok"] = res["ok"] and res["anchor"] in ("ok", "n/a")
+    return res

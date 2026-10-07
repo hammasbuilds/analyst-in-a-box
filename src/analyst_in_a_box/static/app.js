@@ -1,5 +1,8 @@
 /* Analyst-in-a-Box: single-page app. No build step; talks to /api/*. */
-const $ = (s, r = document) => r.querySelector(s);
+// A page that was navigated away from can still be finishing a request; its leftover updates hit
+// elements that no longer exist. Those land on a harmless sink instead of throwing.
+const SINK = new Proxy(function () {}, { get: (_, k) => (k === Symbol.toPrimitive ? () => "" : SINK), set: () => true, apply: () => SINK });
+const $ = (s, r = document) => r.querySelector(s) || SINK;
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = Charts.esc;
 const S = { state: null, actor: null, route: "" };
@@ -51,11 +54,17 @@ function renderNav(counts = {}) {
 
 /* ---------------------------------------------------------------- router */
 const PAGES = {};
+let routeSeq = 0;
 async function route() {
   const r = (location.hash.replace(/^#\//, "").split("?")[0]) || "";
   S.route = PAGES[r] ? r : "";
   renderNav(S.counts);
-  const app = $("#app");
+  const seq = ++routeSeq, real = $("#app");
+  // a page that finishes loading after the user has already moved on must not paint over the new one
+  const app = new Proxy(real, {
+    set(t, k, v) { if (seq === routeSeq) t[k] = v; return true; },
+    get(t, k) { const v = t[k]; return typeof v === "function" ? v.bind(t) : v; },
+  });
   app.innerHTML = loading();
   try { await PAGES[S.route](app); } catch (e) { app.innerHTML = head("Something went wrong", "") + err(e); }
 }
@@ -118,14 +127,14 @@ PAGES.data = async (app) => {
       ${Object.entries(fields).map(([k, d]) => `<label class="f">${esc(d)}<select data-map="${k}"><option value=""></option></select></label>`).join("")}</div>
       <div class="row" style="margin-top:12px"><button class="btn" data-act="map">Build the business tables</button><span id="m-msg" class="small"></span></div></div>` : "");
   const fillMap = () => {
-    const t = sch.tables.find((x) => x.name === ($("#m-table") || {}).value); if (!t) return;
+    const t = sch.tables.find((x) => x.name === (document.querySelector("#m-table") || {}).value); if (!t) return;
     const guess = { invoice: /invoice|order/i, stock_code: /stock|sku|code|product/i, description: /desc|name/i, quantity: /qty|quantity/i, date: /date/i, price: /price|unit/i, customer: /customer|client/i, country: /country/i };
     $$("[data-map]").forEach((sel) => {
       sel.innerHTML = '<option value=""></option>' + t.columns.map((c) => `<option>${esc(c.name)}</option>`).join("");
       const g = t.columns.find((c) => guess[sel.dataset.map].test(c.name)); if (g) sel.value = g.name;
     });
   };
-  if ($("#m-table")) { fillMap(); $("#m-table").onchange = fillMap; }
+  if (document.querySelector("#m-table")) { fillMap(); $("#m-table").onchange = fillMap; }
   const up = async (file) => {
     if (!file) return; const fd = new FormData(); fd.append("file", file);
     $("#up-msg").innerHTML = loading("Importing");
@@ -149,7 +158,7 @@ PAGES.data = async (app) => {
         const r = await post(`/api/sources/${active.id}/map-sales`, { table: $("#m-table").value, mapping });
         toast(`Built ${r.orders} orders for ${r.customers} customers (${r.rows_skipped} rows skipped)`); await boot(); route();
       }
-    } catch (x) { toast(x.message, true); if ($("#m-msg")) $("#m-msg").textContent = ""; }
+    } catch (x) { toast(x.message, true); $("#m-msg").textContent = ""; }
   };
 };
 
@@ -190,8 +199,16 @@ function showResult(res) {
     ${resultChart(res)}
     ${resultTable(res)}
     <details open><summary>The SQL that ran</summary><textarea id="sql-box" rows="${Math.min(14, res.sql.split("\n").length + 1)}" spellcheck="false">${esc(res.sql)}</textarea>
-    <div class="row" style="margin-top:8px"><button class="btn ghost small" id="run-sql">Run edited SQL</button><button class="btn ghost small" id="copy-sql">Copy</button><span class="small muted">Edits are checked the same way: anything but one SELECT is refused.</span></div></details></div>`;
+    <div class="row" style="margin-top:8px"><button class="btn ghost small" id="run-sql">Run edited SQL</button><button class="btn ghost small" id="copy-sql">Copy</button><button class="btn ghost small" id="csv-sql" title="Up to 50,000 rows; text starting with = + - @ is made safe for spreadsheets">Download CSV</button><span class="small muted">Edits are checked the same way: anything but one SELECT is refused.</span></div></details></div>`;
   $("#run-sql").onclick = async () => { try { showResult(await post("/api/sql", { sql: $("#sql-box").value })); loadHistory(); } catch (e) { out.insertAdjacentHTML("afterbegin", `<div style="margin-bottom:10px">${err(e)}</div>`); } };
+  $("#csv-sql").onclick = async () => {
+    try {
+      const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: $("#sql-box").value }) });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || r.statusText); }
+      const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = "analyst-export.csv"; a.click(); URL.revokeObjectURL(a.href);
+      toast(`${r.headers.get("X-Rows")} rows exported${r.headers.get("X-Truncated") === "true" ? " (cut at the cap)" : ""}`);
+    } catch (x) { toast(x.message, true); }
+  };
   $("#copy-sql").onclick = () => { navigator.clipboard && navigator.clipboard.writeText($("#sql-box").value); toast("Copied"); };
 }
 async function loadHistory() {
@@ -301,8 +318,8 @@ PAGES.alerts = async (app) => {
   app.onclick = async (e) => {
     const t = e.target.closest("[data-ticket]"), d = e.target.closest("[data-dismiss]");
     try {
-      if (t) { const r = await post(`/api/alerts/${t.dataset.ticket}/ticket`, { requested_by: S.actor }); toast(`Ticket #${r.id} opened, waiting for a ${r.next_gate}`); refreshCounts(); load(); }
-      if (d) { await post(`/api/alerts/${d.dataset.dismiss}/dismiss`, { actor: S.actor, note: "dismissed from the alert list" }); load(); }
+      if (t) { const r = await post(`/api/alerts/${t.dataset.ticket}/ticket`, { }); toast(`Ticket #${r.id} opened, waiting for a ${r.next_gate}`); refreshCounts(); load(); }
+      if (d) { await post(`/api/alerts/${d.dataset.dismiss}/dismiss`, { note: "dismissed from the alert list" }); load(); }
     } catch (x) { toast(x.message, true); }
   };
   load();
@@ -349,9 +366,9 @@ PAGES.risk = async (app) => {
       <div><h3>Points by feature</h3>${c.points.map((p) => `<div class="row small" style="flex-wrap:nowrap;margin:4px 0"><span style="width:150px">${esc(p.feature)}</span><div class="bar" style="flex:1"><i style="width:${(p.points / best) * 100}%"></i></div><span class="num" style="width:36px">${p.points}</span><span class="muted mono" style="width:120px;overflow:hidden;text-overflow:ellipsis">${esc(p.bin)}</span></div>`).join("")}</div>
       <div><h3>Reason codes</h3>${c.reasons.length ? `<ol>${c.reasons.map((x) => `<li>${esc(x.text)}</li>`).join("")}</ol>` : '<p class="muted small">No feature lost points against its best band.</p>'}${c.warnings.length ? `<div class="note warn">${c.warnings.map(esc).join("<br>")}</div>` : ""}</div>
       <div><h3>Current credit limit</h3><p>${c.credit_limit ? gbp0(c.credit_limit.limit_gbp) + ' <span class="muted small">set ' + esc(c.credit_limit.set_at) + "</span>" : '<span class="muted">none set</span>'}</p></div>
-      <div class="card flat"><h3>Change the credit limit</h3><div class="row"><label class="f">New limit (£)<input type="number" id="cl-new" min="0" step="50" value="${c.credit_limit ? c.credit_limit.limit_gbp : 1000}"></label><button class="btn" id="cl-go" style="align-self:end">Raise ticket</button></div><p class="small muted">Goes to the approval queue as ${esc(S.actor)}. An increase for a declined customer needs the owner too.</p></div></div>`;
+      <div class="card flat"><h3>Change the credit limit</h3><div class="row"><label class="f">New limit (£)<input type="number" id="cl-new" min="0" step="50" value="${c.credit_limit ? c.credit_limit.limit_gbp : 1000}"></label><button class="btn" id="cl-go" style="align-self:end">Raise ticket</button></div><p class="small muted">Goes to the approval queue as ${esc(S.actor || "you once you sign in")}. An increase for a declined customer needs the owner too.</p></div></div>`;
     $("#cl-go").onclick = async () => {
-      try { const t = await post("/api/tickets", { kind: "credit_limit_change", title: `Credit limit for customer ${c.customer_id}`, requested_by: S.actor, customer_id: c.customer_id, reason: `Scorecard ${c.score} (${c.decision}); ` + (c.reasons[0] ? c.reasons[0].text : "no weak features"), payload: { new_limit: +$("#cl-new").value } });
+      try { const t = await post("/api/tickets", { kind: "credit_limit_change", title: `Credit limit for customer ${c.customer_id}`, customer_id: c.customer_id, reason: `Scorecard ${c.score} (${c.decision}); ` + (c.reasons[0] ? c.reasons[0].text : "no weak features"), payload: { new_limit: +$("#cl-new").value } });
         toast(`Ticket #${t.id} raised, needs: ${t.gates.join(" then ")}`); $("#r-drawer").innerHTML = ""; refreshCounts(); } catch (x) { toast(x.message, true); }
     };
   };
@@ -365,7 +382,7 @@ PAGES.workflows = async (app) => {
   const [list, ledger] = await Promise.all([api(`/api/tickets${WS.status ? "?status=" + WS.status : ""}`), api("/api/ledger")]);
   const sm = list.summary.by_status;
   const gateHtml = (t) => `<div class="gates">${t.gates.map((g, i) => `<span class="gate ${i < t.approvals_given ? "done" : ""}">${i < t.approvals_given ? "✓ " : ""}${g}</span>`).join('<span class="muted">›</span>')}</div>`;
-  app.innerHTML = head("Workflows", "Refunds, credit-limit changes and fraud reviews go through approval gates, and every step is written to a tamper-evident audit trail.", `<div class="right row"><span class="muted small">Acting as <b>${esc(S.actor)}</b> (${esc(roleOf(S.actor))})</span></div>`)
+  app.innerHTML = head("Workflows", "Refunds, credit-limit changes and fraud reviews go through approval gates, and every step is written to a tamper-evident audit trail.", `<div class="right row"><span class="muted small">${S.actor ? `Signed in as <b>${esc(S.actor)}</b> (${esc(roleOf(S.actor))})` : "Not signed in: you can read everything, but acting needs your name and PIN (bottom left)"}</span></div>`)
     + `<div class="grid split wide"><div class="card"><div class="tabs">${["pending", "approved", "executed", "rejected", "cancelled", ""].map((s) => `<button data-st="${s}" class="${WS.status === s ? "on" : ""}">${s || "all"}${s && sm[s] != null ? " " + sm[s] : ""}</button>`).join("")}</div>
       ${list.tickets.length ? list.tickets.map((t) => `<div class="alert" data-t="${t.id}" style="cursor:pointer"><div class="row"><b>#${t.id} ${esc(t.title)}</b><span class="badge ${{ pending: "warn", approved: "info", executed: "good", rejected: "bad", cancelled: "" }[t.status]}">${t.status}</span><span class="muted small right">${esc(t.kind.replace(/_/g, " "))}${t.amount != null ? " · " + gbp0(t.amount) : ""}</span></div>
         <div class="row small" style="margin-top:6px">${gateHtml(t)}<span class="muted">raised by ${esc(t.requested_by)}</span></div></div>`).join("") : '<div class="empty">No tickets here.</div>'}</div>
@@ -377,7 +394,7 @@ PAGES.workflows = async (app) => {
         <label class="f">Reason<input type="text" id="n-reason"></label>
         <button class="btn" id="n-go">Raise ticket</button></div></div>
       <div class="card"><h2>Approval policy</h2><ul class="small" style="margin:0;padding-left:18px">${S.state.policy.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div></div></div>
-    <div class="grid cols-2" style="margin-top:16px"><div class="card"><div class="row"><h2 style="margin:0">Audit trail</h2><button class="btn ghost small right" id="verify">Verify chain</button></div><div id="aud" style="margin-top:10px"></div></div>
+    <div class="grid cols-2" style="margin-top:16px"><div class="card"><div class="row"><h2 style="margin:0">Audit trail</h2><span class="right row"><a class="btn ghost small" href="/api/audit/export" download>Download CSV</a><button class="btn ghost small" id="verify">Verify</button></span></div><div id="aud" style="margin-top:10px"></div></div>
       <div class="card"><h2>Executed actions</h2>${ledger.ledger.length || ledger.credit_limits.length ? `<table><tbody>${ledger.ledger.map((l) => `<tr><td>${esc(l.kind)}</td><td>${l.order_id ? "order " + esc(l.order_id) : ""} ${l.customer_id ? "· customer " + esc(l.customer_id) : ""}</td><td class="num">${l.amount != null ? gbp(l.amount) : ""}</td><td class="muted small">#${l.ticket_id}</td></tr>`).join("")}${ledger.credit_limits.map((l) => `<tr><td>credit limit</td><td>customer ${esc(l.customer_id)}</td><td class="num">${gbp0(l.limit_gbp)}</td><td class="muted small">#${l.ticket_id}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">Nothing executed yet.</div>'}
       <p class="small muted">Executing writes to this app's own ledger; your business data is never changed.</p></div></div><div id="t-drawer"></div>`;
   const kindUI = () => { const k = $("#n-kind").value; $("#n-amt-l").firstChild.textContent = k === "credit_limit_change" ? "New limit (£)" : k === "refund" ? "Refund amount (£)" : "Amount (£, optional)"; };
@@ -385,7 +402,7 @@ PAGES.workflows = async (app) => {
   $("#n-go").onclick = async () => {
     const k = $("#n-kind").value, amt = $("#n-amt").value === "" ? null : +$("#n-amt").value;
     try {
-      const t = await post("/api/tickets", { kind: k, title: $("#n-title").value || k.replace(/_/g, " "), requested_by: S.actor, customer_id: $("#n-cust").value || null, order_id: $("#n-order").value || null, amount: k === "credit_limit_change" ? null : amt, reason: $("#n-reason").value, payload: k === "credit_limit_change" ? { new_limit: amt } : {} });
+      const t = await post("/api/tickets", { kind: k, title: $("#n-title").value || k.replace(/_/g, " "), customer_id: $("#n-cust").value || null, order_id: $("#n-order").value || null, amount: k === "credit_limit_change" ? null : amt, reason: $("#n-reason").value, payload: k === "credit_limit_change" ? { new_limit: amt } : {} });
       toast(`Ticket #${t.id} raised, needs: ${t.gates.join(" then ")}`); WS.status = "pending"; refreshCounts(); route();
     } catch (x) { toast(x.message, true); }
   };
@@ -393,12 +410,17 @@ PAGES.workflows = async (app) => {
     const a = await api("/api/audit?limit=12");
     $("#aud").innerHTML = a.length ? a.map((x) => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--border)"><span class="muted">${esc(x.at)}</span> <b>${esc(x.actor)}</b> ${esc(x.action)}${x.ticket_id ? " #" + x.ticket_id : ""} <span class="mono muted" title="${esc(x.hash)}">${esc(x.hash.slice(0, 8))}</span></div>`).join("") : '<div class="empty">No entries yet.</div>';
   };
-  $("#verify").onclick = async () => { const v = await api("/api/audit/verify"); toast(v.ok ? `Chain intact: ${v.entries} entries` : `Chain broken at entry ${v.first_bad_id}`, !v.ok); };
+  $("#verify").onclick = async () => {
+    try {
+      const v = await api("/api/audit/verify");
+      toast(v.ok ? `Audit intact: ${v.entries} entries, signed head ${v.anchor}, ${v.reconcile.tickets_checked} tickets match the trail` : `Audit problem: ${v.problems[0]}${v.problems.length > 1 ? ` (+${v.problems.length - 1} more)` : ""}`, !v.ok);
+    } catch (x) { toast(x.message, true); }
+  };
   loadAudit();
   const openTicket = async (id) => {
     WS.open = id;
     const t = await api(`/api/tickets/${id}`);
-    const mine = t.requested_by === S.actor, role = roleOf(S.actor);
+    const mine = t.requested_by === S.actor, role = roleOf(S.actor) || "nobody";
     $("#t-drawer").innerHTML = `<div class="scrim" data-close></div><div class="drawer stack"><div class="row"><h2 style="margin:0">#${t.id} ${esc(t.title)}</h2><button class="btn ghost small right" data-close>Close</button></div>
       <div class="row"><span class="badge ${{ pending: "warn", approved: "info", executed: "good", rejected: "bad", cancelled: "" }[t.status]}">${t.status}</span><span class="badge">${esc(t.kind.replace(/_/g, " "))}</span>${t.amount != null ? `<span class="badge">${gbp(t.amount)}</span>` : ""}</div>
       <p class="small">${t.customer_id ? "Customer " + esc(t.customer_id) + ". " : ""}${t.order_id ? "Order " + esc(t.order_id) + ". " : ""}Raised by ${esc(t.requested_by)}.</p>
@@ -407,7 +429,7 @@ PAGES.workflows = async (app) => {
       <div><h3>Decisions</h3>${t.approvals.map((a) => `<div class="small"><b>${esc(a.approver)}</b> (${a.role}) ${a.decision}d ${a.comment ? "- " + esc(a.comment) : ""} <span class="muted">${esc(a.at)}</span></div>`).join("") || '<span class="muted small">None yet.</span>'}</div>
       <label class="f">Comment<input type="text" id="t-c"></label>
       <div class="row">${t.status === "pending" ? '<button class="btn" data-do="approve">Approve</button><button class="btn danger" data-do="reject">Reject</button>' : ""}${t.status === "approved" ? '<button class="btn" data-do="execute">Execute</button>' : ""}${["pending", "approved"].includes(t.status) ? '<button class="btn ghost" data-do="cancel">Cancel ticket</button>' : ""}</div>
-      <p class="small muted">Acting as ${esc(S.actor)} (${esc(role)})${mine ? ", who raised this ticket" : ""}. The server enforces the rules; a refused action says why.</p>
+      <p class="small muted">${S.actor ? `Signed in as ${esc(S.actor)} (${esc(role)})${mine ? ", who raised this ticket" : ""}.` : "Sign in to act on this ticket."} The server enforces the rules; a refused action says why.</p>
       <div><h3>Audit</h3>${t.audit.map((x) => `<div class="small"><span class="muted">${esc(x.at)}</span> <b>${esc(x.actor)}</b> ${esc(x.action)} <span class="mono muted">${esc(x.hash.slice(0, 8))}</span></div>`).join("")}</div></div>`;
   };
   app.onclick = async (e) => {
@@ -416,7 +438,7 @@ PAGES.workflows = async (app) => {
     const act = e.target.closest("[data-do]");
     if (act) {
       const id = $(".drawer h2").textContent.match(/#(\d+)/)[1];
-      try { await post(`/api/tickets/${id}/${act.dataset.do}`, { actor: S.actor, comment: $("#t-c").value }); toast("Done"); refreshCounts(); await route(); openTicket(id); }
+      try { await post(`/api/tickets/${id}/${act.dataset.do}`, { comment: $("#t-c").value }); toast("Done"); refreshCounts(); await route(); openTicket(id); }
       catch (x) { toast(x.message, true); }
       return;
     }
@@ -431,12 +453,36 @@ async function boot() {
   S.state = await api("/api/state");
   const l = S.state.llm;
   $("#llmstat").textContent = l.configured ? `model: ${l.provider}` : "no model needed";
-  const sel = $("#actor");
-  let saved = null; try { saved = localStorage.getItem("aib-actor"); } catch (e) { /* private mode */ }
-  S.actor = S.state.users.some((u) => u.name === saved) ? saved : S.state.users[1].name;
-  sel.innerHTML = S.state.users.map((u) => `<option ${u.name === S.actor ? "selected" : ""} value="${esc(u.name)}">${esc(u.name)} (${u.role})</option>`).join("");
-  sel.onchange = () => { S.actor = sel.value; try { localStorage.setItem("aib-actor", S.actor); } catch (e) { /* ignore */ } if (S.route === "workflows") route(); };
+  S.actor = S.state.me ? S.state.me.name : null;
+  drawWho();
 }
+function drawWho() {
+  const box = $("#who"), me = S.state.me;
+  if (me) {
+    box.innerHTML = `<div class="small">Signed in as <b>${esc(me.name)}</b> (${esc(me.role)})</div>
+      <div class="row"><button class="btn ghost small" id="pin-btn">Change PIN</button><button class="btn ghost small" id="out-btn">Sign out</button></div>`;
+    $("#out-btn").onclick = async () => { await post("/api/logout", {}); await afterAuth(); };
+    $("#pin-btn").onclick = () => {
+      box.innerHTML = `<form id="pin-form" class="stack" style="gap:6px"><label class="small" for="pin-old">Current PIN</label><input id="pin-old" type="password" autocomplete="current-password" required>
+        <label class="small" for="pin-new">New PIN (6+ characters)</label><input id="pin-new" type="password" autocomplete="new-password" minlength="6" required>
+        <div class="row"><button class="btn small" type="submit">Save</button><button class="btn ghost small" type="button" id="pin-cancel">Cancel</button></div></form>`;
+      $("#pin-cancel").onclick = drawWho;
+      $("#pin-form").onsubmit = async (e) => { e.preventDefault(); try { await post("/api/me/pin", { old_pin: $("#pin-old").value, new_pin: $("#pin-new").value }); toast("PIN changed; sign in again"); await afterAuth(); } catch (x) { toast(x.message, true); } };
+    };
+    return;
+  }
+  box.innerHTML = `<form id="login" class="stack" style="gap:6px"><label class="small" for="actor">Sign in as</label>
+    <select id="actor">${S.state.users.map((u) => `<option value="${esc(u.name)}">${esc(u.name)} (${u.role})</option>`).join("")}</select>
+    <label class="small" for="pin">PIN</label><input id="pin" type="password" autocomplete="current-password" required>
+    <button class="btn small" type="submit">Sign in</button>
+    <span class="small muted">${S.state.pins_file ? "First-run PINs are in pins.txt in the data folder." : "Ask the owner for your PIN."}</span></form>`;
+  $("#login").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await post("/api/login", { name: $("#actor").value, pin: $("#pin").value }); await afterAuth(); toast("Signed in"); }
+    catch (x) { toast(x.message, true); }
+  };
+}
+async function afterAuth() { await boot(); await refreshCounts(); route(); }
 $("#theme").onclick = () => {
   const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   const next = cur === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next;

@@ -11,7 +11,7 @@ import webbrowser
 
 import uvicorn
 
-from . import config
+from . import appdb, auth, config
 from .app import create_app
 
 
@@ -39,12 +39,25 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--port", type=int, default=8780)
     ap.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
     ap.add_argument("--db", help="app SQLite file (default: ~/.analyst-in-a-box/analyst.sqlite3)")
+    ap.add_argument("--reset-pin", metavar="NAME", help="give NAME a new sign-in PIN, print it, and exit")
     a = ap.parse_args(argv)
     path = a.db or str(config.app_db_path())
+    if a.reset_pin:
+        appdb.init(path)
+        con = appdb.connect(path)
+        try:
+            auth.ensure_credentials(con, None)
+            print(f"New PIN for {a.reset_pin}: {auth.reset_pin(con, a.reset_pin)}")
+        finally:
+            con.close()
+        return
     first_run = not config.sample_db_path().exists()
     if first_run:
         print("First run: building the sample business database (about 10 seconds)...")
-    app = create_app(path)  # builds the sample on first run
+    app = create_app(path, allowed_hosts=[a.host])  # builds the sample on first run
+    if app.state.new_pins:
+        print(f"Sign-in PINs for {len(app.state.new_pins)} people were written to "
+              f"{app.state.pins_file}. Give each person their own line, then delete the file.")
     port = free_port(a.port, a.host)
     url = f"http://{a.host}:{port}"
     print(f"Analyst-in-a-Box on {url}  (data: {config.home()})  Ctrl+C to stop")

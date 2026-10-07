@@ -1,6 +1,8 @@
 """Drive the real UI in headless Chromium, save screenshots, and fail on any console error.
 
-    uv run --with playwright python scripts/ui_tour.py http://127.0.0.1:8791 docs/screenshots
+    uv run --with playwright python scripts/ui_tour.py http://127.0.0.1:8791 docs/screenshots PINS_FILE
+
+PINS_FILE is the pins.txt written next to the app database on first run (name<TAB>PIN per line).
 """
 
 from __future__ import annotations
@@ -18,7 +20,17 @@ def _chrome() -> str | None:
     return str(found[-1]) if found else None
 
 
-def main(base: str, out: str) -> int:
+def _pins(path: str) -> dict[str, str]:
+    out = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith("#") and "\t" in line:
+            name, pin = line.split("\t")
+            out[name] = pin
+    return out
+
+
+def main(base: str, out: str, pins_file: str) -> int:
+    pins = _pins(pins_file)
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     errors: list[str] = []
@@ -28,6 +40,17 @@ def main(base: str, out: str) -> int:
         pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         pg.on("pageerror", lambda e: errors.append(str(e)))
 
+        def sign_in(name: str) -> None:
+            if pg.query_selector("#out-btn"):
+                pg.click("#out-btn")
+            pg.wait_for_selector("#login")
+            pg.select_option("#actor", value=name)
+            pg.fill("#pin", pins[name])
+            pg.click("#login button[type=submit]")
+            pg.wait_for_selector("#out-btn")
+            pg.wait_for_load_state("networkidle")
+            pg.wait_for_timeout(1500)  # let the re-render after sign-in finish before navigating
+
         def shot(name: str, full: bool = True) -> None:
             pg.wait_for_timeout(500)
             pg.screenshot(path=str(out_dir / f"{name}.png"), full_page=full)
@@ -35,6 +58,9 @@ def main(base: str, out: str) -> int:
         pg.goto(base + "/#/")
         pg.wait_for_selector(".kpi")
         shot("01-dashboard")
+        pg.wait_for_selector("#login")
+        shot("14-sign-in", full=False)
+        sign_in("Amna Khan")
 
         pg.goto(base + "/#/data")
         pg.wait_for_selector("details.card")
@@ -44,7 +70,11 @@ def main(base: str, out: str) -> int:
         pg.goto(base + "/#/ask")
         pg.fill("#q", "Top 10 products by revenue in 2011")
         pg.click("#go")
-        pg.wait_for_selector("#sql-box")
+        try:
+            pg.wait_for_selector("#sql-box")
+        except Exception:
+            pg.screenshot(path="ui_tour_failure.png")
+            raise
         shot("03-ask")
         pg.fill("#q", "har mahine ki bikri")
         pg.click("#go")
@@ -73,15 +103,19 @@ def main(base: str, out: str) -> int:
         shot("09-risk-customer", full=False)
         pg.click(".scrim")
 
+        sign_in("Sana Malik")
         pg.goto(base + "/#/workflows")
         pg.wait_for_selector("[data-t]")
         shot("10-workflows")
         pg.click("[data-t] >> nth=0")
         pg.wait_for_selector(".drawer")
-        pg.select_option("#actor", label="Sana Malik (manager)")
         pg.click("[data-do=approve]")
         pg.wait_for_timeout(600)
         shot("11-ticket-approved", full=False)
+        pg.click("[data-close] >> nth=1")
+        pg.click("#verify")
+        pg.wait_for_selector(".toast.show")
+        shot("15-audit-verified", full=False)
 
         pg.emulate_media(color_scheme="dark")
         pg.evaluate("document.documentElement.dataset.theme='dark'")
@@ -100,4 +134,4 @@ def main(base: str, out: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[2]))
+    sys.exit(main(sys.argv[1], sys.argv[2], sys.argv[3]))

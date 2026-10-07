@@ -14,6 +14,7 @@ Layers 2 and 3 are independent; the tests attack each of them separately.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -33,6 +34,9 @@ _FORBIDDEN_FUNCTIONS = {
     "randomblob", "zeroblob",
 }
 _FORBIDDEN_SCHEMAS = {"pg_catalog", "information_schema", "pg_toast"}
+MAX_SQL_CHARS = 20_000
+MAX_CELL_CHARS = 5_000  # longer text cells are cut in results
+MAX_RESULT_CHARS = 4_000_000  # total text a result may carry before it is cut short
 
 
 @dataclass
@@ -61,6 +65,8 @@ def validate(
     sql = (sql or "").strip().rstrip(";").strip()
     if not sql:
         return Validation(ok=False, reason="empty statement")
+    if len(sql) > MAX_SQL_CHARS:
+        return Validation(ok=False, reason=f"statement is longer than {MAX_SQL_CHARS:,} characters")
     try:
         statements = [s for s in parse(sql, read=dialect) if s is not None]
     except Exception as exc:  # ParseError, or TokenError for e.g. an unterminated string
@@ -87,7 +93,8 @@ def validate(
     referenced = _tables(tree)
     for name in referenced:
         schema = name.split(".")[0] if "." in name else ""
-        if schema in _FORBIDDEN_SCHEMAS or name.startswith(("pg_", "sqlite_")):
+        base = name.split(".")[-1]
+        if schema in _FORBIDDEN_SCHEMAS or base.startswith(("pg_", "sqlite_")):
             return Validation(
                 ok=False, refused=True, reason=f"system catalog {name} is not permitted"
             )
@@ -144,10 +151,42 @@ def open_readonly(path: str | Path) -> sqlite3.Connection:
     return con
 
 
-def run_sqlite(path: str | Path, sql: str, *, max_rows: int, timeout_s: float) -> dict[str, Any]:
-    """Run already-validated SQL on a read-only connection with an authoriser and a deadline."""
+def _limit(con: sqlite3.Connection, name: str, value: int) -> None:
+    attr = getattr(sqlite3, name, None)
+    if attr is not None:
+        con.setlimit(attr, value)
+
+
+def _clean(v: Any, budget: list[int], max_cell: int) -> Any:
+    """Make one result cell JSON-safe and bounded: no bytes, no NaN/Inf, no huge strings."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, bytes | bytearray | memoryview):
+        return f"<{len(bytes(v)):,} byte blob>"
+    if isinstance(v, str):
+        if len(v) > max_cell:
+            v = v[:max_cell] + f"... [{len(v) - max_cell:,} more characters]"
+        budget[0] -= len(v)
+    else:
+        budget[0] -= 8
+    return v
+
+
+def run_sqlite(
+    path: str | Path, sql: str, *, max_rows: int, timeout_s: float,
+    max_cell: int = MAX_CELL_CHARS, max_chars: int = MAX_RESULT_CHARS,
+) -> dict[str, Any]:
+    """Run already-validated SQL on a read-only connection with an authoriser, a deadline and
+    hard limits on string size (so printf('%.*c', 900000000, 'x') cannot eat the machine)."""
     con = open_readonly(path)
     try:
+        _limit(con, "SQLITE_LIMIT_LENGTH", 1_000_000)
+        _limit(con, "SQLITE_LIMIT_SQL_LENGTH", MAX_SQL_CHARS * 2)
+        _limit(con, "SQLITE_LIMIT_EXPR_DEPTH", 200)
+        _limit(con, "SQLITE_LIMIT_COMPOUND_SELECT", 20)
+        _limit(con, "SQLITE_LIMIT_LIKE_PATTERN_LENGTH", 500)
+        _limit(con, "SQLITE_LIMIT_FUNCTION_ARG", 16)
+        _limit(con, "SQLITE_LIMIT_ATTACHED", 0)
         con.set_authorizer(_authorizer)
         deadline = time.monotonic() + timeout_s
         con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 20000)
@@ -159,7 +198,13 @@ def run_sqlite(path: str | Path, sql: str, *, max_rows: int, timeout_s: float) -
             raise QueryError(msg) from exc
         cols = [d[0] for d in cur.description or []]
         truncated = len(rows) > max_rows
-        return {"columns": cols, "rows": [list(r) for r in rows[:max_rows]], "truncated": truncated}
+        budget, out = [max_chars], []
+        for r in rows[:max_rows]:
+            out.append([_clean(v, budget, max_cell) for v in r])
+            if budget[0] < 0:
+                truncated = True
+                break
+        return {"columns": cols, "rows": out, "truncated": truncated}
     finally:
         con.close()
 
@@ -179,9 +224,10 @@ def run_postgres(url: str, sql: str, *, max_rows: int, timeout_s: float) -> dict
             cur.execute(sql)
             rows = cur.fetchmany(max_rows + 1)
             cols = [d.name for d in cur.description or []]
+            budget = [MAX_RESULT_CHARS]
             return {
                 "columns": cols,
-                "rows": [list(r) for r in rows[:max_rows]],
+                "rows": [[_clean(v, budget, MAX_CELL_CHARS) for v in r] for r in rows[:max_rows]],
                 "truncated": len(rows) > max_rows,
             }
     except psycopg.Error as exc:

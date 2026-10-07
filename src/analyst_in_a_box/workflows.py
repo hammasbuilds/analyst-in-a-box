@@ -11,7 +11,9 @@ credit-limit table.
 
 from __future__ import annotations
 
+import functools
 import json
+import math
 import sqlite3
 from collections.abc import Callable
 from typing import Any
@@ -51,6 +53,27 @@ class WorkflowError(ValueError):
 
 class TransitionError(WorkflowError):
     pass
+
+
+def _serialised(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Run a state change under the app-wide lock. Without it two simultaneous requests can both
+    read "no approvals yet" and both record one, so one manager could fill both gates of a
+    two-manager refund, or one ticket could be executed twice."""
+    @functools.wraps(fn)
+    def wrapper(*a: Any, **k: Any) -> Any:
+        with appdb.LOCK:
+            return fn(*a, **k)
+    return wrapper
+
+
+def _finite(x: Any, what: str) -> float:
+    try:
+        v = float(x)
+    except (TypeError, ValueError) as exc:
+        raise WorkflowError(f"{what} must be a number") from exc
+    if not math.isfinite(v) or abs(v) > 1e12:
+        raise WorkflowError(f"{what} must be a finite number below 1e12")
+    return v
 
 
 def user_role(name: str) -> str:
@@ -127,6 +150,18 @@ def _set_status(con: sqlite3.Connection, tid: int, status: str) -> None:
     con.commit()
 
 
+def _refunded_or_claimed(con: sqlite3.Connection, order_id: str, skip_ticket: int = 0) -> float:
+    """Refunds already paid on an order plus the amount of refund tickets that could still pay."""
+    paid = con.execute(
+        "SELECT COALESCE(SUM(amount),0) FROM ledger WHERE kind='refund' AND order_id=?",
+        (order_id,)).fetchone()[0]
+    open_ = con.execute(
+        "SELECT COALESCE(SUM(amount),0) FROM tickets WHERE kind='refund' AND order_id=? "
+        "AND status IN ('pending','approved') AND id<>?", (order_id, skip_ticket)).fetchone()[0]
+    return float(paid) + float(open_)
+
+
+@_serialised
 def create(
     con: sqlite3.Connection, *, kind: str, title: str, requested_by: str,
     customer_id: str | None = None, order_id: str | None = None, amount: float | None = None,
@@ -139,6 +174,8 @@ def create(
         raise WorkflowError(f"kind must be one of {', '.join(KINDS)}")
     if not title.strip():
         raise WorkflowError("a ticket needs a title")
+    if amount is not None:
+        amount = _finite(amount, "the amount")
     if kind == "refund":
         if not order_id or amount is None or amount <= 0:
             raise WorkflowError("a refund needs an order id and a positive amount")
@@ -146,20 +183,17 @@ def create(
             room = order_check(order_id, customer_id)
             if room is None:
                 raise WorkflowError(f"order {order_id} does not exist")
-            already = con.execute(
-                "SELECT COALESCE(SUM(amount),0) FROM ledger WHERE kind='refund' AND order_id=?",
-                (order_id,)).fetchone()[0]
+            already = _refunded_or_claimed(con, order_id)
             if amount > room - already + 0.005:
                 raise WorkflowError(
                     f"refund {amount:,.2f} is more than order {order_id} has left to refund "
-                    f"({max(room - already, 0):,.2f})")
+                    f"({max(room - already, 0):,.2f}, counting refunds already made and "
+                    f"tickets still open)")
+            payload["order_total"] = room
     if kind == "credit_limit_change":
         if not customer_id:
             raise WorkflowError("a credit limit change needs a customer id")
-        try:
-            new = float(payload.get("new_limit"))
-        except (TypeError, ValueError) as exc:
-            raise WorkflowError("give the new limit in payload.new_limit") from exc
+        new = _finite(payload.get("new_limit"), "payload.new_limit")
         if new < 0:
             raise WorkflowError("the new limit cannot be negative")
         row = con.execute("SELECT limit_gbp FROM credit_limits WHERE customer_id=?",
@@ -184,6 +218,7 @@ def create(
     return get(con, tid)
 
 
+@_serialised
 def approve(con: sqlite3.Connection, tid: int, actor: str, comment: str = "") -> dict[str, Any]:
     r = _row(con, tid)
     _transition(r, "approved")
@@ -213,6 +248,7 @@ def approve(con: sqlite3.Connection, tid: int, actor: str, comment: str = "") ->
     return get(con, tid)
 
 
+@_serialised
 def reject(con: sqlite3.Connection, tid: int, actor: str, comment: str) -> dict[str, Any]:
     r = _row(con, tid)
     _transition(r, "rejected")
@@ -228,6 +264,7 @@ def reject(con: sqlite3.Connection, tid: int, actor: str, comment: str) -> dict[
     return get(con, tid)
 
 
+@_serialised
 def cancel(con: sqlite3.Connection, tid: int, actor: str) -> dict[str, Any]:
     r = _row(con, tid)
     _transition(r, "cancelled")
@@ -238,6 +275,7 @@ def cancel(con: sqlite3.Connection, tid: int, actor: str) -> dict[str, Any]:
     return get(con, tid)
 
 
+@_serialised
 def execute(con: sqlite3.Connection, tid: int, actor: str) -> dict[str, Any]:
     r = _row(con, tid)
     _transition(r, "executed")
@@ -246,6 +284,15 @@ def execute(con: sqlite3.Connection, tid: int, actor: str) -> dict[str, Any]:
     now = appdb.now()
     payload = json.loads(r["payload"] or "{}")
     if r["kind"] == "refund":
+        total = payload.get("order_total")
+        if total is not None:
+            paid = con.execute(
+                "SELECT COALESCE(SUM(amount),0) FROM ledger WHERE kind='refund' AND order_id=?",
+                (r["order_id"],)).fetchone()[0]
+            if r["amount"] > float(total) - float(paid) + 0.005:
+                raise WorkflowError(
+                    f"order {r['order_id']} has only {max(float(total) - float(paid), 0):,.2f} left "
+                    f"to refund; this ticket asks for {r['amount']:,.2f}. Cancel it.")
         con.execute("INSERT INTO ledger(kind,customer_id,order_id,amount,ticket_id,at) VALUES(?,?,?,?,?,?)",
                     ("refund", r["customer_id"], r["order_id"], r["amount"], tid, now))
         effect = {"ledger": "refund", "amount": r["amount"], "order_id": r["order_id"]}
@@ -278,3 +325,59 @@ def summary(con: sqlite3.Connection) -> dict[str, Any]:
         counts[r["status"]] = r["n"]
     return {"by_status": counts, "awaiting_approval": counts["pending"],
             "awaiting_execution": counts["approved"]}
+
+
+_STATUS_AFTER = {
+    "ticket.created": "pending", "ticket.fully_approved": "approved", "ticket.rejected": "rejected",
+    "ticket.cancelled": "cancelled", "ticket.executed": "executed",
+}
+
+
+def reconcile(con: sqlite3.Connection) -> dict[str, Any]:
+    """Check the live tables against the audit trail. The hash chain protects the audit rows only;
+    this catches someone editing the tickets, approvals, ledger or credit limits directly (for
+    example UPDATE tickets SET status='approved') without leaving an audit entry."""
+    problems: list[str] = []
+    events: dict[int, list[sqlite3.Row]] = {}
+    for a in con.execute("SELECT * FROM audit WHERE ticket_id IS NOT NULL ORDER BY id"):
+        events.setdefault(a["ticket_id"], []).append(a)
+    tickets = list(con.execute("SELECT * FROM tickets ORDER BY id"))
+    for t in tickets:
+        ev = events.get(t["id"], [])
+        if not ev or ev[0]["action"] != "ticket.created":
+            problems.append(f"ticket {t['id']} has no creation entry in the audit trail")
+            continue
+        created = json.loads(ev[0]["detail"])
+        if ev[0]["actor"] != t["requested_by"]:
+            problems.append(f"ticket {t['id']}: requested_by is {t['requested_by']} but the audit says {ev[0]['actor']}")
+        if json.dumps(created.get("gates")) != t["gates"]:
+            problems.append(f"ticket {t['id']}: approval gates differ from the audit trail")
+        if created.get("amount") != t["amount"]:
+            problems.append(f"ticket {t['id']}: amount {t['amount']} differs from the audit trail ({created.get('amount')})")
+        status = "pending"
+        for e in ev:
+            status = _STATUS_AFTER.get(e["action"], status)
+        if status != t["status"]:
+            problems.append(f"ticket {t['id']} is {t['status']} but the audit trail says {status}")
+        given = [e for e in ev if e["action"] == "ticket.approved"]
+        rows = con.execute(
+            "SELECT approver FROM approvals WHERE ticket_id=? AND decision='approve' ORDER BY id", (t["id"],)).fetchall()
+        if [e["actor"] for e in given] != [r[0] for r in rows]:
+            problems.append(f"ticket {t['id']}: the approvals table does not match the audited approvals")
+    ids = {t["id"] for t in tickets}
+    for tid in set(events) - ids:
+        if any(e["action"] == "ticket.created" for e in events[tid]):
+            problems.append(f"ticket {tid} is in the audit trail but missing from the tickets table")
+    executed = {a["ticket_id"]: json.loads(a["detail"]) for a in con.execute(
+        "SELECT * FROM audit WHERE action='ticket.executed'")}
+    for r in con.execute("SELECT * FROM ledger WHERE ticket_id IS NOT NULL"):
+        eff = executed.get(r["ticket_id"])
+        if eff is None:
+            problems.append(f"ledger row {r['id']} (ticket {r['ticket_id']}) has no audited execution")
+        elif eff.get("amount") is not None and eff.get("amount") != r["amount"]:
+            problems.append(f"ledger row {r['id']}: amount {r['amount']} differs from the audited {eff['amount']}")
+    for r in con.execute("SELECT * FROM credit_limits WHERE ticket_id IS NOT NULL"):
+        eff = executed.get(r["ticket_id"])
+        if eff is None or eff.get("credit_limit") != r["limit_gbp"]:
+            problems.append(f"credit limit of customer {r['customer_id']} does not match ticket {r['ticket_id']}'s audited execution")
+    return {"tickets_checked": len(tickets), "problems": problems}

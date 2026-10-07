@@ -6,6 +6,7 @@ import csv
 import io
 import re
 import sqlite3
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,11 @@ def add_source(con: sqlite3.Connection, kind: str, location: str, name: str | No
     location = (location or "").strip()
     if kind == "sqlite":
         _check_sqlite(location)
+        mine = {config.app_db_path().resolve(), config.uploads_db_path().resolve()}
+        if Path(location).resolve() in mine or Path(location).resolve() == Path(
+                con.execute("PRAGMA database_list").fetchone()[2] or "-").resolve():
+            raise SourceError(
+                "that file is the app's own database (tickets, PINs, audit); it cannot be a data source")
         name = name or Path(location).name
     elif kind == "postgres":
         if not re.match(r"^postgres(ql)?://", location):
@@ -128,6 +134,19 @@ def is_sqlite(src: dict[str, Any]) -> bool:
 # ---- schema browser --------------------------------------------------------------------------
 
 
+def _q(name: str) -> str:
+    """A SQLite identifier, quoted, with any double quote doubled."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _cell(v: Any) -> Any:
+    if isinstance(v, bytes | bytearray):
+        return f"<{len(v):,} byte blob>"
+    if isinstance(v, float) and v != v:
+        return None
+    return v[:200] if isinstance(v, str) else v
+
+
 def schema(src: dict[str, Any], *, sample_rows: int = 3) -> list[dict[str, Any]]:
     if src["kind"] == "postgres":
         res = sqlsafe.run_postgres(
@@ -147,9 +166,11 @@ def schema(src: dict[str, Any], *, sample_rows: int = 3) -> list[dict[str, Any]]
             "SELECT name FROM sqlite_master WHERE type IN ('table','view') "
             "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
         for t in names:
-            cols = [{"name": r[1], "type": r[2] or "TEXT"} for r in con.execute(f'PRAGMA table_info("{t}")')]
-            n = con.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
-            sample = [list(r) for r in con.execute(f'SELECT * FROM "{t}" LIMIT {int(sample_rows)}')]
+            q = _q(t)
+            cols = [{"name": r[1], "type": r[2] or "TEXT"} for r in con.execute(f"PRAGMA table_info({q})")]
+            n = con.execute(f"SELECT COUNT(*) FROM {q}").fetchone()[0]
+            sample = [[_cell(v) for v in r]
+                      for r in con.execute(f"SELECT * FROM {q} LIMIT {int(sample_rows)}")]
             out.append({"name": t, "rows": n, "columns": cols, "sample": sample})
         return out
     finally:
@@ -180,7 +201,8 @@ def is_canonical(src: dict[str, Any]) -> bool:
         con.close()
 
 
-def query(src: dict[str, Any], sql: str, *, max_rows: int | None = None) -> dict[str, Any]:
+def query(src: dict[str, Any], sql: str, *, max_rows: int | None = None,
+          max_chars: int | None = None) -> dict[str, Any]:
     """Validate then run one read-only statement. Raises QueryError with a reason."""
     max_rows = max_rows or config.MAX_ROWS
     v = sqlsafe.validate(
@@ -194,7 +216,8 @@ def query(src: dict[str, Any], sql: str, *, max_rows: int | None = None) -> dict
         )
     else:
         res = sqlsafe.run_sqlite(
-            src["location"], v.rewritten, max_rows=max_rows, timeout_s=config.QUERY_TIMEOUT_S
+            src["location"], v.rewritten, max_rows=max_rows, timeout_s=config.QUERY_TIMEOUT_S,
+            **({"max_chars": max_chars} if max_chars else {}),
         )
     res["sql"] = v.rewritten
     res["tables"] = v.tables_touched
@@ -225,37 +248,62 @@ def _ident(name: str, taken: set[str], fallback: str) -> str:
     return s
 
 
+_INT_RE = re.compile(r"[-+]?(0|[1-9]\d{0,18})")
+_FLOAT_RE = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
+_I64 = 2**63 - 1
+
+
+def _is_int(v: Any) -> bool:
+    """A whole number that survives as an INTEGER: no leading zeros (postcodes, ids), within 64 bits."""
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):
+        return abs(v) <= _I64
+    if isinstance(v, float):
+        return v == v and abs(v) < 2**53 and v == int(v)
+    s = str(v).strip().replace(",", "") if re.fullmatch(r"[-+]?\d{1,3}(,\d{3})+", str(v).strip()) else str(v).strip()
+    return bool(_INT_RE.fullmatch(s)) and abs(int(s)) <= _I64
+
+
+def _is_float(v: Any) -> bool:
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int | float):
+        return v == v and abs(v) != float("inf")
+    s = str(v).strip()
+    s = s.replace(",", "") if re.fullmatch(r"[-+]?\d{1,3}(,\d{3})+(\.\d+)?", s) else s
+    if re.fullmatch(r"[-+]?0\d+", s.split(".")[0] if "." in s else s):  # 007, 00123.5
+        return False
+    if re.fullmatch(r"[-+]?\d{16,}", s):  # a long id, not a measurement: keep every digit
+        return False
+    return bool(_FLOAT_RE.fullmatch(s)) and abs(float(s)) != float("inf")
+
+
+def _blank(v: Any) -> bool:
+    return v in (None, "") or (isinstance(v, str) and v.strip().lower() == "nan") or (
+        isinstance(v, float) and v != v)
+
+
 def _infer(values: list[Any]) -> str:
-    vals = [v for v in values if v not in (None, "")]
+    vals = [v for v in values if not _blank(v)]
     if not vals:
         return "TEXT"
     if all(isinstance(v, bool) for v in vals):
         return "INTEGER"
-    def num(v: Any, cast: type) -> bool:
-        if isinstance(v, bool):
-            return False
-        try:
-            if isinstance(v, str):
-                if cast is int and not re.fullmatch(r"[-+]?\d+", v.strip()):
-                    return False
-                cast(v.replace(",", ""))
-            elif cast is int and float(v) != int(v):
-                return False
-            return True
-        except (ValueError, TypeError):
-            return False
-    if all(num(v, int) for v in vals):
+    if all(_is_int(v) for v in vals):
         return "INTEGER"
-    if all(num(v, float) for v in vals):
+    if all(_is_float(v) for v in vals):
         return "REAL"
     return "TEXT"
 
 
 def _coerce(v: Any, ty: str) -> Any:
-    if v in (None, ""):
+    if _blank(v):
         return None
     if ty == "INTEGER":
-        return int(float(str(v).replace(",", "")))
+        if isinstance(v, int | float):
+            return int(v)
+        return int(str(v).strip().replace(",", ""))
     if ty == "REAL":
         return float(str(v).replace(",", ""))
     if hasattr(v, "strftime"):
@@ -269,27 +317,70 @@ def _read_csv(data: bytes) -> list[list[Any]]:
         dia = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|")
     except csv.Error:
         dia = csv.excel
-    return [row for row in csv.reader(io.StringIO(text), dia) if any(c.strip() for c in row)]
+    rows: list[list[Any]] = []
+    old = csv.field_size_limit(config.MAX_CELL_CHARS)
+    try:
+        for row in csv.reader(io.StringIO(text), dia):
+            if any(c.strip() for c in row):
+                rows.append(row)
+                if len(rows) > config.MAX_UPLOAD_ROWS + 1:
+                    raise SourceError(f"more than {config.MAX_UPLOAD_ROWS:,} rows; split the file")
+    except csv.Error as exc:
+        raise SourceError(
+            f"cannot read the CSV: {exc} (a cell may be longer than "
+            f"{config.MAX_CELL_CHARS:,} characters, or a quote is not closed)") from exc
+    finally:
+        csv.field_size_limit(old)
+    return rows
+
+
+def _check_zip(data: bytes) -> None:
+    """Refuse a decompression bomb before openpyxl inflates it: a 40 MB workbook can hold gigabytes."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            infos = z.infolist()
+            total = sum(i.file_size for i in infos)
+    except zipfile.BadZipFile as exc:
+        raise SourceError("that is not a valid .xlsx file") from exc
+    if len(infos) > 2000 or total > config.MAX_UNZIPPED_BYTES:
+        raise SourceError(
+            f"the workbook unpacks to {total // 1024 // 1024} MB; the limit is "
+            f"{config.MAX_UNZIPPED_BYTES // 1024 // 1024} MB")
 
 
 def _read_xlsx(data: bytes) -> dict[str, list[list[Any]]]:
     import openpyxl
 
+    _check_zip(data)
     wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     out = {}
-    for ws in wb.worksheets:
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
-        rows = [r for r in rows if any(c not in (None, "") for c in r)]
-        if rows:
-            out[ws.title] = rows
-    wb.close()
+    try:
+        if len(wb.worksheets) > 50:
+            raise SourceError("more than 50 sheets in one workbook")
+        for ws in wb.worksheets:
+            rows: list[list[Any]] = []
+            seen = 0
+            for r in ws.iter_rows(values_only=True):
+                seen += 1
+                if seen > config.MAX_UPLOAD_ROWS * 2:
+                    raise SourceError(f"sheet {ws.title!r} has more than {config.MAX_UPLOAD_ROWS:,} rows")
+                if any(c not in (None, "") for c in r):
+                    rows.append(list(r))
+            if rows:
+                out[ws.title] = rows
+    finally:
+        wb.close()
     return out
 
 
 def _store(con: sqlite3.Connection, table: str, rows: list[list[Any]]) -> dict[str, Any]:
+    if not rows:
+        raise SourceError(f"{table}: no rows")
     header, body = rows[0], rows[1:]
     if not body:
         raise SourceError(f"{table}: a header and no data rows")
+    if len(header) > config.MAX_UPLOAD_COLUMNS:
+        raise SourceError(f"{table}: {len(header)} columns; the limit is {config.MAX_UPLOAD_COLUMNS}")
     taken: set[str] = set()
     cols = [_ident(h, taken, f"col{i + 1}") for i, h in enumerate(header)]
     width = len(cols)
@@ -315,6 +406,8 @@ def import_upload(app_con: sqlite3.Connection, filename: str, data: bytes) -> di
     elif ext in (".xlsx", ".xlsm"):
         try:
             sheets = _read_xlsx(data)
+        except SourceError:
+            raise
         except Exception as exc:
             raise SourceError(f"cannot read the workbook: {exc}") from exc
     else:
@@ -332,7 +425,11 @@ def import_upload(app_con: sqlite3.Connection, filename: str, data: bytes) -> di
                 name = f"t_{name}"
             if name in canon.CANON_TABLES:
                 name += "_upload"
-            created.append(_store(con, name, rows))
+            try:
+                created.append(_store(con, name, rows))
+            except (sqlite3.Error, OverflowError, ValueError) as exc:
+                con.rollback()
+                raise SourceError(f"{name}: cannot store this sheet ({exc})") from exc
     finally:
         con.close()
     row = app_con.execute("SELECT id FROM sources WHERE kind='upload'").fetchone()
