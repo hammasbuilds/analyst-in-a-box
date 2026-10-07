@@ -210,3 +210,22 @@ def test_cache_busting_and_revalidation(client):
     finally:
         f.write_bytes(orig)
     assert appmod._build_id() == before
+
+
+def test_paste_csv_matches_file_upload(client):
+    text = "sku;qty;price\nA1;2;1.50\nB2;5;3.25\n"
+    pasted = ok(client.post("/api/upload-text", json={"name": "My Sales!", "text": text}))
+    assert pasted["tables"][0]["table"] == "my_sales" and pasted["tables"][0]["rows"] == 2
+    filed = client.post("/api/upload", files={"file": ("my_sales2.csv", text.encode())}).json()
+    assert filed["tables"][0]["columns"] == pasted["tables"][0]["columns"]
+    assert ok(client.get("/api/state"))["source"]["kind"] == "upload"
+
+
+def test_paste_csv_errors_are_clear(client):
+    assert client.post("/api/upload-text", json={"name": "x", "text": "   \n"}).status_code == 400
+    r = client.post("/api/upload-text", json={"name": "x", "text": "only,a,header\n"})
+    assert r.status_code == 400 and r.json()["detail"]
+
+
+def test_paste_requires_sign_in(plain_client):
+    assert plain_client.post("/api/upload-text", json={"name": "x", "text": "a\n1\n"}).status_code == 401

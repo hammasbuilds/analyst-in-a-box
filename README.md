@@ -11,6 +11,20 @@ Connect a database or drop in a spreadsheet and you can ask it questions in Engl
 
 Full sets (home, dashboard, ask; dark and light; desktop and 390 px) are in `docs/screenshots/redesign/green` and `docs/screenshots/redesign/indigo`. The page and every static asset are revalidated on each load (`Cache-Control: no-cache`, content-hashed `?v=` URLs), so a reload always shows the newest UI. The design notes are in [docs/MOTION.md](docs/MOTION.md).
 
+## Inputs
+
+| Feature | Upload from the computer | Paste | Hint and example |
+|---|---|---|---|
+| Data (spreadsheets) | file picker or drag and drop; .csv, .tsv, .txt, .xlsx, .xlsm; 40 MB, 1,000,000 rows, 500 columns; progress bar, clear errors | paste CSV text (`POST /api/upload-text`, same parser, limits and audit entry) | header-row format shown, Load example button |
+| Data (databases) | SQLite file path | PostgreSQL URL | placeholder shows both forms |
+| Ask your data | not applicable (a question is text) | type or paste a question or SQL | example chips, input hint |
+| Dashboard, forecasts, fraud, risk, workflows | read what is in the active source | not applicable | an empty or non-business source points to Data |
+
+Importing needs a manager sign-in. The in-app **About & guide** page (also the **?** button) covers what it is, how to use it with the expected input and output of each feature, its limits, privacy, the roadmap and the maker.
+
+![About and guide](docs/screenshots/inputs/about-dark-desktop.png)
+![Paste CSV next to the file drop zone](docs/screenshots/inputs/data-after-dark-desktop.png)
+
 ![Home: the Try-it panel and KPI cards with sparklines](docs/screenshots/01-dashboard.png)
 
 ## Try it (input, output)

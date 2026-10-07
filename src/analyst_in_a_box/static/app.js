@@ -29,7 +29,8 @@ function toast(msg, bad) {
 }
 const busy = (el, on) => { if (el) { el.disabled = on; } };
 const loading = (msg = "Working") => `<div class="empty"><span class="spin"></span> ${esc(msg)}…</div>`;
-const err = (e) => `<div class="note bad">${esc(e.message || e)}</div>`;
+const dataHint = `<p class="small muted guide">No data of your own yet? Open <a href="#/data">Data</a> to drop a file, choose one, or paste CSV text, or press Load example there.</p>`;
+const err = (e) => `<div class="note bad">${esc(e.message || e)}</div>${/Data page|needs the .*tables/.test(String(e.message || e)) ? dataHint : ""}`;
 const head = (title, sub, extra = "") => `<div class="pagehead"><div><h1>${esc(title)}</h1><p>${sub}</p></div>${extra}</div>`;
 
 const ICONS = {
@@ -40,11 +41,12 @@ const ICONS = {
   alerts: "M12 3l10 18H2zM12 10v5M12 18v.5",
   risk: "M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5zM9 12l2 2 4-4",
   workflows: "M4 6h16M4 12h16M4 18h10M18 16l2 2 3-4",
+  about: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01",
 };
 const NAV = [
   ["", "Dashboard", "dashboard"], ["data", "Data", "data"], ["ask", "Ask your data", "ask"],
   ["forecast", "Forecasts", "forecast"], ["alerts", "Fraud & anomalies", "alerts"],
-  ["risk", "Customer risk", "risk"], ["workflows", "Workflows", "workflows"],
+  ["risk", "Customer risk", "risk"], ["workflows", "Workflows", "workflows"], ["about", "About & guide", "about"],
 ];
 
 function renderNav(counts = {}) {
@@ -66,7 +68,7 @@ async function route() {
     get(t, k) { const v = t[k]; return typeof v === "function" ? v.bind(t) : v; },
   });
   app.innerHTML = loading();
-  try { await PAGES[S.route](app); } catch (e) { app.innerHTML = head("Something went wrong", "") + err(e); }
+  try { await PAGES[S.route](app); } catch (e) { app.innerHTML = head("Something went wrong", "") + err(e) + dataHint; }
 }
 window.addEventListener("hashchange", route);
 
@@ -151,7 +153,7 @@ PAGES[""] = async (app) => {
   runHero(DEMO[0], true);  // the page's own example, answered by the real backend on load
   const d = await api("/api/dashboard");
   const box = $("#dash");
-  if (!d.canonical) { box.innerHTML = `<div class="note warn">${esc(d.message)}</div>`; return; }
+  if (!d.canonical) { box.innerHTML = `<div class="note warn">${esc(d.message)}</div>${dataHint}`; return; }
   const fmt = { gbp: gbp0, count: (v) => (v == null ? "-" : num(v)), pct: (v) => v + "%" };
   const card = (c) => `<div class="kpi"><div class="l">${esc(c.label)}</div><div class="v">${fmt[c.unit](c.value)}</div>${c.change_pct == null ? '<div class="delta muted">&nbsp;</div>' : `<div class="delta ${c.change_pct >= 0 ? "up" : "down"}">${c.change_pct >= 0 ? "▲" : "▼"} ${Math.abs(c.change_pct)}% vs prior 30 days</div>`}${c.spark ? Charts.spark(c.spark) : ""}</div>`;
   box.innerHTML = `<p class="muted small" style="margin:0 0 10px">Business pulse as of <b>${esc(d.as_of)}</b>, the newest order in the data. ${num(d.totals.orders)} orders, ${num(d.totals.customers)} customers, ${num(d.totals.products)} products. Sparklines show the last 13 weeks.</p>`
@@ -165,6 +167,7 @@ PAGES[""] = async (app) => {
 };
 
 /* ---------------------------------------------------------------- data */
+const PASTE_EXAMPLE = "invoice,sku,description,qty,price,date,customer,country\nA1001,MUG1,Blue mug,2,4.50,2024-03-01,C01,United Kingdom\nA1001,TEA2,Green tea tin,1,6.00,2024-03-01,C01,United Kingdom\nA1002,MUG1,Blue mug,5,4.50,2024-03-02,C02,Ireland";
 PAGES.data = async (app) => {
   const [srcs, sch, fields] = await Promise.all([api("/api/sources"), api("/api/schema"), api("/api/sales-fields")]);
   const active = srcs.find((s) => s.active);
@@ -185,12 +188,23 @@ PAGES.data = async (app) => {
             <button class="btn" data-act="connect">Connect</button>
             <p class="small muted">PostgreSQL needs the optional driver (<span class="mono">uv sync --extra postgres</span>). Connections are opened read-only. Questions and the schema browser work on both; the dashboard, forecasts, fraud screen and risk need the SQLite order tables.</p>
           </div></details></div>
-      <div class="card"><h2>Upload CSV or Excel</h2>
-        <div class="drop" id="drop"><p>Drop a .csv, .tsv or .xlsx file here</p><input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm"></div>
-        <p class="small muted">Each sheet becomes a table in "My uploads"; column types are inferred, and the upload becomes the active source.</p><div id="up-msg"></div></div>
+      <div class="card"><h2>Add your own data</h2>
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Drop a file here or press Enter to choose one">
+          <p><b>Drop a file here</b> or <label class="link" for="file">choose from your computer</label></p>
+          <p class="small">Accepted: .csv, .tsv, .txt, .xlsx, .xlsm. Up to 40 MB, 1,000,000 rows and 500 columns per sheet.</p>
+          <input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm" hidden>
+          <div class="progress" id="up-prog" hidden><i></i></div></div>
+        <details class="paste" id="paste-box" open><summary>Or paste CSV text</summary>
+          <label class="f">Table name<input type="text" id="p-name" value="pasted_sales" maxlength="60"></label>
+          <label class="f">Paste rows here (first line is the header; commas, semicolons, tabs or pipes all work)
+            <textarea id="p-text" rows="6" spellcheck="false" placeholder="${esc(PASTE_EXAMPLE)}"></textarea></label>
+          <div class="row"><button class="btn" id="p-go">Import pasted data</button><button class="btn ghost" id="p-ex" type="button">Load example</button>
+            <span class="small muted" id="p-count"></span></div></details>
+        <p class="small muted">What input looks like: one header row, then one row per record, for example <span class="mono">invoice,sku,qty,price</span>. Each sheet becomes a table in "My uploads"; column types are inferred, and it becomes the active source. Importing needs a manager sign-in.</p>
+        <div id="up-msg"></div></div>
     </div>`
     + `<div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">Schema of ${esc(sch.source)}</h2><span class="badge ${sch.canonical ? "good" : ""}">${sch.canonical ? "business tables present" : "generic tables"}</span></div>
-      <div class="stack" style="margin-top:12px">${sch.tables.map(tableCard).join("") || '<div class="empty">No tables.</div>'}</div></div>`
+      <div class="stack" style="margin-top:12px">${sch.tables.map(tableCard).join("") || '<div class="empty">No tables yet. Drop a file, choose one, or paste CSV text above.</div>'}</div></div>`
     + (active && active.kind === "upload" && sch.tables.length ? `<div class="card" style="margin-top:16px"><h2>Use an uploaded sheet as your sales data</h2>
       <p class="muted small">Map one sheet of order lines (one row per product on an order) and every module works on it: dashboard, forecasts, fraud, risk. It builds customers, products, orders, order_items and payments in the uploads database.</p>
       <div class="grid cols-3"><label class="f">Sheet<select id="m-table">${sch.tables.filter((t) => !["customers", "products", "orders", "order_items", "payments"].includes(t.name)).map((t) => `<option>${esc(t.name)}</option>`).join("")}</select></label>
@@ -205,17 +219,39 @@ PAGES.data = async (app) => {
     });
   };
   if (document.querySelector("#m-table")) { fillMap(); $("#m-table").onchange = fillMap; }
-  const up = async (file) => {
-    if (!file) return; const fd = new FormData(); fd.append("file", file);
-    $("#up-msg").innerHTML = loading("Importing");
-    try { const r = await api("/api/upload", { method: "POST", body: fd }); toast(`Imported ${r.tables.map((t) => t.table + " (" + t.rows + " rows)").join(", ")}`); route(); }
-    catch (e) { $("#up-msg").innerHTML = err(e); }
+  const done = (r) => { toast(`Imported ${r.tables.map((t) => t.table + " (" + t.rows + " rows)").join(", ")}`); route(); };
+  const MAX = 40 * 1024 * 1024, OK = /\.(csv|tsv|txt|xlsx|xlsm)$/i;
+  const up = (file) => {
+    if (!file) return;
+    if (!OK.test(file.name)) { $("#up-msg").innerHTML = err("That file type is not accepted. Use .csv, .tsv, .txt, .xlsx or .xlsm."); return; }
+    if (file.size > MAX) { $("#up-msg").innerHTML = err(`That file is ${(file.size / 1048576).toFixed(1)} MB; the limit is 40 MB. Split it and upload the parts.`); return; }
+    const fd = new FormData(); fd.append("file", file);
+    const prog = $("#up-prog"), bar = $("#up-prog i"); prog.hidden = false; bar.style.width = "0%";
+    $("#up-msg").innerHTML = loading(`Uploading ${file.name}`);
+    const x = new XMLHttpRequest(); x.open("POST", "/api/upload"); x.responseType = "json";
+    x.upload.onprogress = (e) => { if (e.lengthComputable) bar.style.width = Math.round((e.loaded / e.total) * 100) + "%"; };
+    x.onload = () => {
+      prog.hidden = true; const d = x.response;
+      if (x.status >= 200 && x.status < 300) done(d);
+      else $("#up-msg").innerHTML = err((d && typeof d.detail === "string" && d.detail) || x.statusText || "upload failed");
+    };
+    x.onerror = () => { prog.hidden = true; $("#up-msg").innerHTML = err("the upload did not reach the app"); };
+    x.send(fd);
   };
   $("#file").onchange = (e) => up(e.target.files[0]);
   const drop = $("#drop");
+  drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#file").click(); } };
   ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => up(e.dataTransfer.files[0]));
+  const pcount = () => { const t = $("#p-text").value; const n = t.split("\n").filter((l) => l.trim()).length; $("#p-count").textContent = n ? `${Math.max(0, n - 1)} data rows, ${(new Blob([t]).size / 1024).toFixed(1)} KB` : ""; };
+  $("#p-text").oninput = pcount;
+  $("#p-ex").onclick = () => { $("#p-text").value = PASTE_EXAMPLE; pcount(); };
+  $("#p-go").onclick = async () => {
+    if (!$("#p-text").value.trim()) { Motion.shake($("#p-text")); $("#up-msg").innerHTML = err("Paste a header row and at least one data row first, or press Load example."); return; }
+    $("#up-msg").innerHTML = loading("Importing");
+    try { done(await post("/api/upload-text", { name: $("#p-name").value, text: $("#p-text").value })); } catch (e) { $("#up-msg").innerHTML = err(e); }
+  };
   app.onclick = async (e) => {
     const b = e.target.closest("[data-act]"); if (!b) return;
     try {
@@ -291,6 +327,7 @@ PAGES.ask = async (app) => {
   app.innerHTML = head("Ask your data", "Ask in English or Roman Urdu. You always see the SQL, and nothing can write to your data.")
     + `<div class="card stack"><div class="row" style="flex-wrap:nowrap"><input type="text" id="q" placeholder="e.g. Top 10 products by revenue in 2011   |   har mahine ki bikri" autocomplete="off"><button class="btn" id="go">Ask</button></div>
     <div class="chips">${ex.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>
+    <p class="small muted guide">What input looks like: one plain question, in English or Roman Urdu, for example <i>Top 10 products by revenue in 2011</i>. Pasting a long question or an SQL query here works too, and the chips below load an example. No data of your own yet? Add some on <a href="#/data">Data</a>.</p>
     <p class="small muted">${hasLLM ? `Language model: <b>${esc(S.state.llm.provider)}:${esc(S.state.llm.model)}</b>. Its SQL goes through the same checks, and the built-in parser answers if it fails.` : "No language model configured: questions are answered by the built-in parser, which knows revenue (net of cancellations; say &ldquo;gross revenue&rdquo; for the figure before them), orders, customers, units, refunds, averages, rankings, time breakdowns, countries and categories. Set ANALYST_LLM to add one."}</p></div>
     <div id="ask-out" style="margin-top:16px"></div>
     <div class="card" style="margin-top:16px"><h2>Recent questions</h2><div id="hist"></div></div>`;
@@ -455,7 +492,7 @@ PAGES.workflows = async (app) => {
   app.innerHTML = head("Workflows", "Refunds, credit-limit changes and fraud reviews go through approval gates, and every step is written to a tamper-evident audit trail.", `<div class="right row"><span class="muted small">${S.actor ? `Signed in as <b>${esc(S.actor)}</b> (${esc(roleOf(S.actor))})` : "Not signed in: you can read everything, but acting needs your name and PIN (bottom left)"}</span></div>`)
     + `<div class="grid split wide"><div class="card"><div class="tabs">${["pending", "approved", "executed", "rejected", "cancelled", ""].map((s) => `<button data-st="${s}" class="${WS.status === s ? "on" : ""}">${s || "all"}${s && sm[s] != null ? " " + sm[s] : ""}</button>`).join("")}</div>
       ${list.tickets.length ? list.tickets.map((t) => `<div class="alert" data-t="${t.id}" style="cursor:pointer"><div class="row"><b>#${t.id} ${esc(t.title)}</b><span class="badge ${{ pending: "warn", approved: "info", executed: "good", rejected: "bad", cancelled: "" }[t.status]}">${t.status}</span><span class="muted small right">${esc(t.kind.replace(/_/g, " "))}${t.amount != null ? " · " + gbp0(t.amount) : ""}</span></div>
-        <div class="row small" style="margin-top:6px">${gateHtml(t)}<span class="muted">raised by ${esc(t.requested_by)}</span></div></div>`).join("") : '<div class="empty">No tickets here.</div>'}</div>
+        <div class="row small" style="margin-top:6px">${gateHtml(t)}<span class="muted">raised by ${esc(t.requested_by)}</span></div></div>`).join("") : '<div class="empty">No tickets here. Tickets are raised from a fraud alert or a customer-risk page; sign in as a manager to approve them.</div>'}</div>
       <div class="stack"><div class="card"><h2>New ticket</h2><div class="stack">
         <label class="f">Type<select id="n-kind"><option value="refund">Refund</option><option value="credit_limit_change">Credit limit change</option><option value="fraud_review">Fraud review</option></select></label>
         <label class="f">Title<input type="text" id="n-title" placeholder="e.g. Refund for damaged goods"></label>
@@ -517,6 +554,55 @@ PAGES.workflows = async (app) => {
   if (WS.open) openTicket(WS.open).catch(() => { WS.open = null; });
 };
 const roleOf = (n) => (S.state.users.find((u) => u.name === n) || {}).role || "";
+
+/* ---------------------------------------------------------------- about & guide */
+PAGES.about = async (app) => {
+  const L = (r, t) => `<a href="#/${r}">${t}</a>`;
+  const sec = (id, title, body) => `<section class="card guide-sec" id="g-${id}"><h2>${title}</h2>${body}</section>`;
+  app.innerHTML = head("About & guide", "What this is, how to use it, what it will not do, and where your data lives.")
+    + `<nav class="chips guide-toc" aria-label="On this page">${[["what", "What it is"], ["does", "What it does"], ["use", "How to use it"], ["not", "What it does not do"], ["privacy", "Privacy"], ["vision", "Vision and goal"], ["maker", "About the maker"]]
+      .map(([i, t]) => `<a class="chip" href="#/about" data-jump="g-${i}">${t}</a>`).join("")}</nav>`
+    + `<div class="stack guide">`
+    + sec("what", "What it is", `<p>Analyst-in-a-Box is an AI back office for a small business that runs on your own computer. Connect a database or add a spreadsheet and you can ask questions in English or Roman Urdu, see the SQL that answered them, forecast demand, screen for odd orders and refunds, score customers, and push refunds and credit-limit changes through approval gates with a tamper-evident audit trail. It works offline; a language model is optional and its output is never trusted.</p>`)
+    + sec("does", "What it does", `<ul>
+      <li>${L("", "Dashboard")}: KPI cards with sparklines and charts for revenue, orders, customers and refunds, plus a live example question.</li>
+      <li>${L("data", "Data")}: connect SQLite or PostgreSQL, or add a CSV, TSV or Excel file, or paste CSV text; browse the schema.</li>
+      <li>${L("ask", "Ask your data")}: plain-language questions turned into one read-only SELECT, shown to you, editable, exportable as CSV.</li>
+      <li>${L("forecast", "Forecasts")}: weekly unit demand per product, with totals that add up and a check against a seasonal-naive baseline.</li>
+      <li>${L("alerts", "Fraud & anomalies")}: flagged orders and refunds with the reasons, which you can dismiss or turn into a ticket.</li>
+      <li>${L("risk", "Customer risk")}: a points scorecard with reason codes and a fairness panel.</li>
+      <li>${L("workflows", "Workflows")}: refund and credit-limit tickets that need the right people to approve, a ledger, and an audit trail you can verify.</li></ul>`)
+    + sec("use", "How to use it", `<ol>
+      <li><b>Look first.</b> The ${L("", "Dashboard")} opens on the bundled sample business (about 15,860 orders), so you can try everything before adding your own data. Asking needs no sign-in.</li>
+      <li><b>Add your data</b> on ${L("data", "Data")}. Input: a <span class="mono">.csv</span>, <span class="mono">.tsv</span>, <span class="mono">.txt</span>, <span class="mono">.xlsx</span> or <span class="mono">.xlsm</span> file (drop it on the box or choose it; 40 MB, 1,000,000 rows, 500 columns), or pasted text whose first line is the header, for example
+        <pre class="mono">invoice,sku,qty,price
+A1001,MUG1,2,4.50
+A1002,TEA2,1,6.00</pre>Press Load example to try it. Output: a table per sheet under "My uploads", with inferred column types, set as the active source. Importing needs a manager sign-in; the PINs are in <span class="mono">pins.txt</span> in the data folder on first run.</li>
+      <li><b>Build the business tables</b> (optional) on ${L("data", "Data")}: map the columns of an order-lines sheet (invoice, stock code, quantity, date, price, customer, country) and the dashboard, forecasts, fraud screen and risk page work on your data.</li>
+      <li><b>Ask</b> on ${L("ask", "Ask your data")}. Input: one question, for example <i>Top 10 products by revenue in 2011</i> or <i>har mahine ki bikri</i>. Output: the SQL, a table, a chart, and a note on how it was understood. "Revenue" means net revenue (completed sales minus cancellations); say "gross revenue" for the figure before cancellations.</li>
+      <li><b>Check</b> ${L("forecast", "Forecasts")}, ${L("alerts", "Fraud & anomalies")} and ${L("risk", "Customer risk")}. Output: tables and charts with the reasons shown.</li>
+      <li><b>Act</b> on ${L("workflows", "Workflows")}. Sign in, raise a ticket from an alert or a customer, and have the required people approve it. Nobody can approve their own request; every step goes into the audit trail, and Verify checks it.</li></ol>`)
+    + sec("not", "What it does not do", `<ul>
+      <li>It gives no fraud verdicts. There are no labels, so alerts are prompts for a person to look at; many flags are real customers buying a lot.</li>
+      <li>The risk model is a refund-behaviour proxy, not credit-loss prediction, and it is weak on the small held-out split.</li>
+      <li>Forecasts cover units, not revenue.</li>
+      <li>The built-in parser is not a language model. When it cannot map a question it says so instead of guessing.</li>
+      <li>PostgreSQL supports Ask and the schema browser only, and was not tested against a live server.</li>
+      <li>Sign-in is PINs for a fixed list of four people on one machine, not single sign-on. Approving a refund writes the app's own ledger; it does not pay anyone.</li>
+      <li>Uploads have limits (40 MB, 1,000,000 rows, 500 columns), not quotas.</li></ul><p class="small muted">The full list, with numbers, is in the README.</p>`)
+    + sec("privacy", "Privacy", `<ul>
+      <li>Everything is stored in one folder on this computer (<span class="mono">~/.analyst-in-a-box</span>, or the folder named by <span class="mono">ANALYST_HOME</span>): the app database, your uploads, the sample data, the sign-in PINs file and the audit head and key.</li>
+      <li>Uploaded and pasted data stay in that folder. The app has no analytics and sends nothing to its maker.</li>
+      <li>The fonts are bundled, so opening a page makes no request to another site.</li>
+      <li>Only if you set <span class="mono">ANALYST_LLM</span> (Ollama, Anthropic or an OpenAI-compatible server) are your question and the table and column names sent to that model. Result rows are not. With Ollama it stays on your machine.</li></ul>`)
+    + sec("vision", "Vision and goal", `<p>The goal is a back office a small shop can run without a data team or a cloud account: questions answered with the SQL visible, actions that need two people, and a record nobody can quietly rewrite. It is a one-machine tool today. The gaps still open, from the review notes, are adding and removing people from the screen, saved questions and a scheduled digest, refunds that call a real payment provider, revenue forecasts with what-if prices, and attachments and comments on tickets.</p>`)
+    + sec("maker", "About the maker", `<p>Built by <b>Muhammad Hammas</b>, AI engineer. Source and issues: <a href="https://github.com/hammasbuilds/analyst-in-a-box" target="_blank" rel="noopener">github.com/hammasbuilds/analyst-in-a-box</a>. More projects: <a href="https://github.com/hammasbuilds" target="_blank" rel="noopener">github.com/hammasbuilds</a>.</p>`)
+    + `</div>`;
+  app.onclick = (e) => {
+    const j = e.target.closest("[data-jump]"); if (!j) return;
+    e.preventDefault(); const t = document.getElementById(j.dataset.jump); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+};
 
 /* ---------------------------------------------------------------- boot */
 async function boot() {

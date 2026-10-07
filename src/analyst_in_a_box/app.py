@@ -88,6 +88,11 @@ class SourceIn(BaseModel):
     name: str | None = None
 
 
+class PasteIn(BaseModel):
+    name: str = "pasted"
+    text: str
+
+
 class AskIn(BaseModel):
     question: str
     source_id: int | None = None
@@ -185,7 +190,7 @@ def create_app(db_path: str | Path | None = None, allowed_hosts: list[str] | Non
                 return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
             if request.headers.get("sec-fetch-site") == "cross-site":
                 return JSONResponse({"detail": "cross-site request refused"}, status_code=403)
-            limit = (config.MAX_UPLOAD_BYTES + 1024 * 1024 if request.url.path == "/api/upload"
+            limit = (config.MAX_UPLOAD_BYTES + 1024 * 1024 if request.url.path in ("/api/upload", "/api/upload-text")
                      else config.MAX_JSON_BODY)
             try:
                 declared = int(request.headers.get("content-length") or 0)
@@ -338,6 +343,18 @@ def create_app(db_path: str | Path | None = None, allowed_hosts: list[str] | Non
         res = sources.import_upload(con, file.filename or "upload.csv", b"".join(chunks))
         appdb.audit(con, name, "source.uploaded", None, {
             "file": (file.filename or "")[:120], "tables": [t["table"] for t in res["tables"]]})
+        return res
+
+    @app.post("/api/upload-text")
+    def upload_text(body: PasteIn, name: str = Me, con: sqlite3.Connection = Con) -> dict[str, Any]:
+        """Pasted CSV/TSV text: same parser, limits and audit as a file upload."""
+        need_manager(name)
+        if not body.text.strip():
+            raise sources.SourceError("nothing to import: paste a header row and at least one data row")
+        stem = re.sub(r"[^0-9a-zA-Z]+", "_", body.name).strip("_")[:60] or "pasted"
+        res = sources.import_upload(con, stem + ".csv", body.text.encode("utf-8"))
+        appdb.audit(con, name, "source.uploaded", None, {
+            "file": stem + ".csv (pasted)", "tables": [t["table"] for t in res["tables"]]})
         return res
 
     @app.get("/api/sales-fields")
