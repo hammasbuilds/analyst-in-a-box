@@ -91,5 +91,16 @@ const Charts = (() => {
     return `<div style="height:22px;border-radius:8px;overflow:hidden;display:flex;background:var(--surface-2)">${segs}</div><div class="legend">${leg}</div>`;
   }
 
-  return { line, bars, columns, share, esc, compact };
+  /* Sparkline for a KPI card: stretches to the card width, the end point is a gold dot. */
+  function spark(values) {
+    const v = values.filter((x) => x != null);
+    if (v.length < 2 || Math.max(...v) === Math.min(...v)) return "";
+    const W = 160, H = 34, P = 5, lo = Math.min(...v), hi = Math.max(...v);
+    const x = (i) => P + (i * (W - 2 * P)) / (v.length - 1), y = (n) => H - P - ((n - lo) / (hi - lo)) * (H - 2 * P);
+    const d = v.map((n, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(n).toFixed(1)}`).join("");
+    const last = v.length - 1;
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="trend over the last ${v.length} weeks"><path class="ar" d="${d}L${x(last).toFixed(1)},${H}L${x(0).toFixed(1)},${H}Z"/><path class="ln" d="${d}"/><path class="dot" d="M${x(last).toFixed(1)},${y(v[last]).toFixed(1)}h.01"/></svg>`;
+  }
+
+  return { line, bars, columns, share, spark, esc, compact };
 })();

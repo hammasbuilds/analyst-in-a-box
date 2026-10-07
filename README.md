@@ -4,7 +4,20 @@ An AI back office for a small business that runs on your own computer, with no G
 
 Connect a database or drop in a spreadsheet and you can ask it questions in English or Roman Urdu and see the SQL it ran, forecast demand with totals that add up, get odd orders and refunds flagged with reasons, score customers with a points scorecard and a fairness panel, push refunds and credit-limit changes through approval gates with a tamper-evident audit trail, and watch the KPIs on a dashboard. Everything is offline; a language model is optional and never trusted.
 
-![Dashboard](docs/screenshots/01-dashboard.png)
+![Home: the Try-it panel and KPI cards with sparklines](docs/screenshots/01-dashboard.png)
+
+## Try it (input, output)
+
+The home page runs a real question through the app's own `/api/ask` when it loads and each time you press Run. Asking is read-only, so it works without signing in; the PIN is only for changes (tickets, approvals, uploads).
+
+| Input (English or Roman Urdu) | Output |
+|---|---|
+| `top 5 products by revenue last quarter` | SQL, 5 rows (PAPER CRAFT , LITTLE BIRDIE £168,469.60 first), bar chart; "last quarter" is the newest quarter in the data |
+| `monthly revenue in 2011` | SQL with a 2011 filter, 12 monthly rows, line chart |
+| `is mahine sab se zyada bikne wali cheez` | Roman Urdu understood; "this month" filter, top products by revenue, bar chart |
+| `revenue by country` | SQL, 32 rows, bar chart |
+
+![Roman Urdu in the Try-it panel](docs/screenshots/16-try-it-roman-urdu.png)
 
 | | |
 |---|---|
@@ -15,7 +28,7 @@ Connect a database or drop in a spreadsheet and you can ask it questions in Engl
 | **Customer risk** | WoE/IV scorecard with points and reason codes per customer, Gini and Brier on train, validation and test, calibration, a fairness audit by country and tenure. Raise a credit-limit ticket from a customer. |
 | **Workflows** | Tickets for refunds, credit-limit changes and fraud reviews. PIN sign-in, approval gates by amount, four-eyes, roles, a state machine, and a SHA-256 hash-chained audit trail with a signed head and a cross-check against the live tables. |
 | **Export** | Any query result as a CSV (up to 50,000 rows) and the audit trail as a CSV. Text that starts with `=`, `+`, `-` or `@` is neutralised so a spreadsheet will not run it. |
-| **Dashboard** | KPI cards with change against the previous 30 days, revenue by month, country, product and category. |
+| **Dashboard** | A Try-it panel (question in, SQL, table and chart out), KPI cards with 13-week sparklines and change against the previous 30 days, revenue by month, country, product and category. |
 
 ## Run it
 
@@ -206,3 +219,5 @@ No bypass of the read-only guarantee was found: every attack above was refused b
 ## Licence
 
 MIT. Sample data: UCI Online Retail II, CC BY 4.0.
+
+The Manrope typeface in `src/analyst_in_a_box/static/fonts` is bundled under the SIL Open Font License 1.1.

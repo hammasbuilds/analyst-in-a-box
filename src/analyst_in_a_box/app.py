@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,7 @@ class AskIn(BaseModel):
     question: str
     source_id: int | None = None
     use_llm: bool = True
+    preview: bool = False  # the home-page example on load: not written to the question history
 
 
 class SqlIn(BaseModel):
@@ -321,8 +323,12 @@ def create_app(db_path: str | Path | None = None, allowed_hosts: list[str] | Non
     @app.post("/api/ask")
     def ask(body: AskIn, con: sqlite3.Connection = Con) -> dict[str, Any]:
         src = active(con, body.source_id)
+        t0 = time.perf_counter()
         res = nlq.answer(src, body.question, client=llm.get_client() if body.use_llm else None)
-        log_query(con, res)
+        res["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+        # only the fixed home-page examples may skip the history; every other question is logged
+        if not (body.preview and body.question in nlq.DEMO_QUESTIONS):
+            log_query(con, res)
         return res
 
     @app.post("/api/sql")

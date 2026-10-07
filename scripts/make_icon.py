@@ -1,4 +1,4 @@
-"""Draw the app icon (four white bars on a teal tile) and write assets/analyst-in-a-box.ico.
+"""Draw the app icon (two white bars and a gold bar on an emerald-to-teal tile) and write assets/analyst-in-a-box.ico.
 
 Pure standard library: pixels are computed here and stored as PNG entries inside the .ico.
 """
@@ -10,7 +10,7 @@ import zlib
 from pathlib import Path
 
 SS = 3  # supersampling per axis
-BARS = [(0.22, 0.36), (0.38, 0.22), (0.54, 0.46), (0.70, 0.30)]  # x centre, top (fraction of height)
+BARS = [(0.28, 0.54), (0.50, 0.38), (0.72, 0.22)]  # x centre, top (fraction of height); the last is gold
 
 
 def inside_tile(x: float, y: float, s: float) -> bool:
@@ -19,17 +19,18 @@ def inside_tile(x: float, y: float, s: float) -> bool:
     return (x - cx) ** 2 + (y - cy) ** 2 <= r * r
 
 
-def in_bar(x: float, y: float, s: float) -> bool:
-    w = s * 0.095
-    for cx, top in BARS:
+def in_bar(x: float, y: float, s: float) -> int:
+    """0 outside the bars, 1 inside a white bar, 2 inside the gold bar."""
+    w = s * 0.075
+    for n, (cx, top) in enumerate(BARS):
         x0, x1, y0, y1 = cx * s - w, cx * s + w, top * s, s * 0.78
         rr = w
-        if x0 <= x <= x1 and y0 + rr <= y <= y1 - rr:
-            return True
+        hit = x0 <= x <= x1 and y0 + rr <= y <= y1 - rr
         for ex, ey in ((cx * s, y0 + rr), (cx * s, y1 - rr)):
-            if (x - ex) ** 2 + (y - ey) ** 2 <= rr * rr:
-                return True
-    return False
+            hit = hit or (x - ex) ** 2 + (y - ey) ** 2 <= rr * rr
+        if hit:
+            return 2 if n == len(BARS) - 1 else 1
+    return 0
 
 
 def render(size: int) -> bytes:
@@ -37,19 +38,23 @@ def render(size: int) -> bytes:
     for py in range(size):
         row = bytearray([0])
         for px in range(size):
-            cov = bars = 0
+            cov = white = gold = 0
             for sy in range(SS):
                 for sx in range(SS):
                     x, y = px + (sx + 0.5) / SS, py + (sy + 0.5) / SS
                     if inside_tile(x, y, size):
                         cov += 1
-                        bars += in_bar(x, y, size)
+                        hit = in_bar(x, y, size)
+                        white += hit == 1
+                        gold += hit == 2
             n = SS * SS
             if cov == 0:
                 row += bytes([0, 0, 0, 0])
             else:
-                t = bars / cov
-                r, g, b = (round(15 + (255 - 15) * t), round(118 + (255 - 118) * t), round(110 + (255 - 110) * t))
+                u = (px + py) / (2 * size)  # emerald (5,150,105) to teal (15,118,110) along the diagonal
+                base = (5 + 10 * u, 150 - 32 * u, 105 + 5 * u)
+                tw, tg = white / cov, gold / cov
+                r, g, b = (round(base[i] * (1 - tw - tg) + 255 * tw + (242, 193, 78)[i] * tg) for i in range(3))
                 row += bytes([r, g, b, round(255 * cov / n)])
         rows.append(bytes(row))
     raw = b"".join(rows)

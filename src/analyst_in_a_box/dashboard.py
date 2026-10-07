@@ -13,6 +13,30 @@ def _pct(now: float, before: float) -> float | None:
     return round((now - before) / before * 100, 1) if before else None
 
 
+def _weekly(src: dict[str, Any], hi: datetime, weeks: int = 13) -> dict[str, list[float]]:
+    """Thirteen weekly points ending at the newest order, oldest first, for the KPI sparklines."""
+    lo = (hi - timedelta(days=weeks * 7)).strftime("%Y-%m-%d %H:%M:%S")
+    got = {r["b"]: r for r in sources.rows_of(
+        src,
+        "SELECT CAST((julianday(?) - julianday(order_date)) / 7 AS INTEGER) b, "
+        "COALESCE(SUM(CASE WHEN status='completed' THEN total END),0) rev, "
+        "COUNT(CASE WHEN status='completed' THEN 1 END) n, "
+        "COALESCE(SUM(CASE WHEN status='cancelled' THEN -total END),0) ref, "
+        "COUNT(DISTINCT CASE WHEN status='completed' THEN customer_id END) cust "
+        "FROM orders WHERE order_date > ? GROUP BY b",
+        (hi.strftime("%Y-%m-%d %H:%M:%S"), lo))}
+    out: dict[str, list[float]] = {k: [] for k in ("revenue", "orders", "aov", "customers", "refund_rate")}
+    for b in range(weeks - 1, -1, -1):
+        r = got.get(b)
+        rev, n = (r["rev"], r["n"]) if r else (0.0, 0)
+        out["revenue"].append(round(rev, 2))
+        out["orders"].append(n)
+        out["aov"].append(round(rev / n, 2) if n else 0.0)
+        out["customers"].append(r["cust"] if r else 0)
+        out["refund_rate"].append(round(r["ref"] / rev * 100, 2) if r and rev else 0.0)
+    return out
+
+
 def build(src: dict[str, Any], *, open_alerts: int | None, tickets: dict[str, Any]) -> dict[str, Any]:
     if not sources.is_canonical(src):
         return {"canonical": False,
@@ -38,18 +62,20 @@ def build(src: dict[str, Any], *, open_alerts: int | None, tickets: dict[str, An
     q90 = window(90, 0)
     aov = cur["revenue"] / cur["orders"] if cur["orders"] else 0.0
     aov_prev = prev["revenue"] / prev["orders"] if prev["orders"] else 0.0
+    spark = _weekly(src, hi)
     cards = [
         {"key": "revenue", "label": "Revenue, last 30 days", "value": round(cur["revenue"], 2),
-         "unit": "gbp", "change_pct": _pct(cur["revenue"], prev["revenue"])},
+         "unit": "gbp", "change_pct": _pct(cur["revenue"], prev["revenue"]),
+         "spark": spark["revenue"]},
         {"key": "orders", "label": "Orders, last 30 days", "value": cur["orders"], "unit": "count",
-         "change_pct": _pct(cur["orders"], prev["orders"])},
+         "change_pct": _pct(cur["orders"], prev["orders"]), "spark": spark["orders"]},
         {"key": "aov", "label": "Average order value", "value": round(aov, 2), "unit": "gbp",
-         "change_pct": _pct(aov, aov_prev)},
+         "change_pct": _pct(aov, aov_prev), "spark": spark["aov"]},
         {"key": "customers", "label": "Active customers, 90 days", "value": q90["customers"],
-         "unit": "count", "change_pct": None},
+         "unit": "count", "change_pct": None, "spark": spark["customers"]},
         {"key": "refund_rate", "label": "Refund rate, 90 days",
          "value": round(q90["refunds"] / q90["revenue"] * 100, 1) if q90["revenue"] else 0.0,
-         "unit": "pct", "change_pct": None},
+         "unit": "pct", "change_pct": None, "spark": spark["refund_rate"]},
         {"key": "alerts", "label": "Open fraud and anomaly alerts", "value": open_alerts,
          "unit": "count", "change_pct": None},
         {"key": "tickets", "label": "Tickets awaiting approval", "value": tickets["awaiting_approval"],

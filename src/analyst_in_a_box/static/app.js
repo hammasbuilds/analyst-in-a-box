@@ -79,18 +79,87 @@ async function refreshCounts() {
 }
 
 /* ---------------------------------------------------------------- dashboard */
+const DEMO = [
+  "top 5 products by revenue last quarter", "monthly revenue in 2011",
+  "is mahine sab se zyada bikne wali cheez", "revenue by country",
+];
+const SQL_KW = /('[^']*')|\b(SELECT|FROM|WHERE|GROUP BY|ORDER BY|LIMIT|JOIN|ON|AS|AND|OR|NOT|IN|IS|NULL|DESC|ASC|SUM|COUNT|AVG|MAX|MIN|ROUND|DISTINCT|CASE|WHEN|THEN|ELSE|END|CAST|INTEGER|SUBSTRING|LIKE|BETWEEN|HAVING)\b|(\b\d+(?:\.\d+)?\b)/gi;
+function sqlHtml(sql) {
+  let out = "", at = 0, m;
+  SQL_KW.lastIndex = 0;
+  while ((m = SQL_KW.exec(sql))) {
+    out += esc(sql.slice(at, m.index));
+    out += `<span class="${m[1] ? "s" : m[2] ? "k" : "n"}">${esc(m[0])}</span>`;
+    at = m.index + m[0].length;
+  }
+  return out + esc(sql.slice(at));
+}
+const heroSkeleton = () => `<div class="strip"><span class="skel" style="width:120px;height:20px"></span><span class="skel" style="width:90px;height:20px"></span></div>
+  <div class="skel" style="height:150px"></div><div class="skel" style="height:96px"></div><div class="skel" style="height:110px"></div>`;
+function heroOutput(res, total) {
+  if (!res.ok) {
+    return `<div class="note bad">${esc(res.error || "No answer")}</div>${res.note ? `<p class="small muted">${esc(res.note)}</p>` : ""}
+      ${res.sql ? `<div class="sqlview">${sqlHtml(res.sql)}</div>` : ""}
+      ${res.examples && res.examples.length ? `<div class="chips">${res.examples.slice(0, 4).map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>` : ""}`;
+  }
+  const n = res.rows.length;
+  return `<div class="strip"><span class="badge ${res.mode === "llm" ? "info" : "acc"}">${res.mode === "llm" ? "language model" : "built-in parser, no model"}</span>
+      ${res.language === "roman-ur" ? '<span class="badge gold">Roman Urdu understood</span>' : ""}
+      <span class="badge good" title="One SELECT, run on a read-only connection with an authoriser">read-only checked</span>
+      <span class="badge timing" title="Time the database took, then the full round trip to this page">${n} row${n === 1 ? "" : "s"} &middot; SQL ${res.elapsed_ms} ms &middot; ${total} ms total</span></div>
+    ${res.explanation ? `<div class="t-explain">${esc(res.explanation)}</div>` : ""}
+    ${resultChart(res)}
+    ${resultTable(res)}
+    <details open><summary>The SQL that ran</summary><div class="sqlview">${sqlHtml(res.sql)}</div></details>`;
+}
+let heroSeq = 0;
+async function runHero(q, preview = false) {
+  if (!q.trim()) { toast("Type a question first", true); return; }
+  const seq = ++heroSeq;
+  $("#t-q").value = q;
+  $("#t-go").disabled = true;
+  $("#t-out").innerHTML = heroSkeleton();
+  const t0 = performance.now();
+  let html;
+  try { html = heroOutput(await post("/api/ask", { question: q, preview }), Math.round(performance.now() - t0)); }
+  catch (e) { html = err(e); }
+  if (seq !== heroSeq) return;
+  $("#t-out").innerHTML = html;
+  $("#t-go").disabled = false;
+}
+const heroHtml = () => `<section class="hero page-in" aria-label="Try it">
+    <span class="kicker"><i></i>Try it, live</span>
+    <h1>Ask your numbers in plain English or Roman Urdu.</h1>
+    <p class="sub">Type a business question. You get the SQL that answers it, the result table and a chart, produced right now by this app against its own data. Nothing can write to your data.</p>
+    <div class="tryit">
+      <div class="pane"><div class="tag"><b>1</b>Your question<span class="badge acc">no sign-in needed</span></div>
+        <label class="sr" for="t-q" style="position:absolute;left:-9999px">Business question</label>
+        <textarea id="t-q" rows="3" spellcheck="false" autocomplete="off">${esc(DEMO[0])}</textarea>
+        <div class="go"><button class="btn" id="t-go">Run</button><span class="small muted">Enter runs it, Shift+Enter adds a line</span></div>
+        <div class="chips" id="t-chips">${DEMO.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>
+        <p class="signnote">Asking is read-only, so it works without signing in. Signing in (bottom left, with your PIN) is only for changes such as tickets, approvals and uploads.</p></div>
+      <div class="pane"><div class="tag"><b>2</b>The answer</div><div class="out" id="t-out">${heroSkeleton()}</div></div>
+    </div></section>`;
+const kpiSkeleton = () => `<div class="kpis">${'<div class="kpi"><div class="skel" style="height:12px;width:60%"></div><div class="skel" style="height:28px;width:45%;margin-top:10px"></div><div class="skel" style="height:34px;margin-top:10px"></div></div>'.repeat(5)}</div>`;
+
 PAGES[""] = async (app) => {
+  app.innerHTML = heroHtml() + `<div id="dash">${kpiSkeleton()}</div>`;
+  $("#t-go").onclick = () => runHero($("#t-q").value);
+  $("#t-q").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runHero($("#t-q").value); } };
+  app.onclick = (e) => { const c = e.target.closest("[data-q]"); if (c && !c.disabled) runHero(c.dataset.q); };
+  runHero(DEMO[0], true);  // the page's own example, answered by the real backend on load
   const d = await api("/api/dashboard");
-  if (!d.canonical) { app.innerHTML = head("Dashboard", "Key numbers for the business") + `<div class="note warn">${esc(d.message)}</div>`; return; }
+  const box = $("#dash");
+  if (!d.canonical) { box.innerHTML = `<div class="note warn">${esc(d.message)}</div>`; return; }
   const fmt = { gbp: gbp0, count: (v) => (v == null ? "-" : num(v)), pct: (v) => v + "%" };
-  const card = (c) => `<div class="kpi"><div class="l">${esc(c.label)}</div><div class="v">${fmt[c.unit](c.value)}</div>${c.change_pct == null ? '<div class="delta muted">&nbsp;</div>' : `<div class="delta ${c.change_pct >= 0 ? "up" : "down"}">${c.change_pct >= 0 ? "▲" : "▼"} ${Math.abs(c.change_pct)}% vs prior 30 days</div>`}</div>`;
-  app.innerHTML = head("Dashboard", `Everything as of <b>${esc(d.as_of)}</b>, the newest order in the data. ${num(d.totals.orders)} orders, ${num(d.totals.customers)} customers, ${num(d.totals.products)} products.`)
+  const card = (c) => `<div class="kpi"><div class="l">${esc(c.label)}</div><div class="v">${fmt[c.unit](c.value)}</div>${c.change_pct == null ? '<div class="delta muted">&nbsp;</div>' : `<div class="delta ${c.change_pct >= 0 ? "up" : "down"}">${c.change_pct >= 0 ? "▲" : "▼"} ${Math.abs(c.change_pct)}% vs prior 30 days</div>`}${c.spark ? Charts.spark(c.spark) : ""}</div>`;
+  box.innerHTML = `<p class="muted small" style="margin:0 0 10px">Business pulse as of <b>${esc(d.as_of)}</b>, the newest order in the data. ${num(d.totals.orders)} orders, ${num(d.totals.customers)} customers, ${num(d.totals.products)} products. Sparklines show the last 13 weeks.</p>`
     + `<div class="kpis">${d.cards.map(card).join("")}</div>`
     + `<div class="grid cols-2">
       <div class="card"><h2>Revenue by month</h2>${Charts.columns({ rows: d.charts.monthly_revenue, fmt: (v) => "£" + Charts.compact(v), highlightLast: d.last_month_partial })}${d.last_month_partial ? '<p class="small muted">The newest month is partial, so its bar is faded.</p>' : ""}</div>
       <div class="card"><h2>Revenue by country</h2>${Charts.bars({ rows: d.charts.revenue_by_country, fmt: (v) => "£" + Charts.compact(v), color: "var(--c2)" })}</div>
       <div class="card"><h2>Top products by revenue</h2>${Charts.bars({ rows: d.charts.top_products, fmt: (v) => "£" + Charts.compact(v), color: "var(--c3)", labelW: 190 })}</div>
-      <div class="card"><h2>Revenue by category</h2>${Charts.bars({ rows: d.charts.revenue_by_category, fmt: (v) => "£" + Charts.compact(v), color: "var(--c5)", labelW: 150 })}<p class="small muted">Categories are derived from product descriptions by keyword rules.</p></div>
+      <div class="card"><h2>Revenue by category</h2>${Charts.bars({ rows: d.charts.revenue_by_category, fmt: (v) => "£" + Charts.compact(v), color: "var(--c1)", labelW: 150 })}<p class="small muted">Categories are derived from product descriptions by keyword rules.</p></div>
     </div>`;
 };
 

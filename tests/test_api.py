@@ -167,3 +167,21 @@ def test_credit_limit_ticket_uses_server_side_risk_decision(client):
     ok(client.post(f"/api/tickets/{t['id']}/execute", json={"actor": "Omar Siddiqui"}))
     assert ok(client.get("/api/ledger"))["credit_limits"][0]["limit_gbp"] == 800
     assert ok(client.get(f"/api/risk/customer/{declined}"))["credit_limit"]["limit_gbp"] == 800
+
+
+def test_home_example_is_not_logged_but_every_other_question_is(client):
+    before = len(ok(client.get("/api/ask/history")))
+    q = "top 5 products by revenue last quarter"
+    r = ok(client.post("/api/ask", json={"question": q, "preview": True}))
+    assert r["ok"] and r["elapsed_ms"] >= 0
+    assert len(ok(client.get("/api/ask/history"))) == before
+    # the flag cannot be used to hide an arbitrary question
+    ok(client.post("/api/ask", json={"question": "Top 3 customers in 2011", "preview": True}))
+    assert len(ok(client.get("/api/ask/history"))) == before + 1
+
+
+def test_dashboard_cards_carry_weekly_sparklines(client):
+    cards = {c["key"]: c for c in ok(client.get("/api/dashboard"))["cards"]}
+    for k in ("revenue", "orders", "aov", "customers", "refund_rate"):
+        assert len(cards[k]["spark"]) == 13
+    assert sum(cards["orders"]["spark"]) > 0

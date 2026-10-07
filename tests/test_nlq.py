@@ -101,3 +101,13 @@ def test_llm_off_by_default_and_key_missing_is_reported(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert llm.get_client() is None and "missing" in llm.status()["note"]
     pytest.importorskip("fastapi")
+
+
+def test_relative_periods_filter_and_do_not_pick_the_dimension(src):
+    r = ask(src, "top 5 products by revenue last quarter")
+    assert r["ok"] and "'-Q'" in r["sql"] and len(r["rows"]) <= 5
+    assert "quarter" in r["explanation"]
+    # "is mahine" = this month; the thing to rank is the product, not the month
+    r = ask(src, "is mahine sab se zyada bikne wali cheez")
+    assert r["language"] == "roman-ur" and r["chart"]["x"] == "product"
+    assert "SUBSTRING(MAX(order_date), 1, 7)" in r["sql"] or "substr(MAX(order_date), 1, 7)" in r["sql"]

@@ -24,6 +24,8 @@ URDU_PHRASES = [
     ("sab se kam", "lowest"), ("sabse kam", "lowest"), ("ke hisab se", "by"),
     ("kitne log", "how many customer"), ("kis mulk", "which country"), ("kon sa", "which"),
     ("kaun sa", "which"), ("kaun si", "which"), ("kon si", "which"),
+    ("is mahine", "this month"), ("is mahina", "this month"), ("is maheena", "this month"),
+    ("is saal", "this year"), ("is sal", "this year"),
 ]
 URDU_WORDS = {
     "kitne": "how many", "kitni": "how many", "kitna": "how many", "kitnay": "how many",
@@ -96,6 +98,12 @@ EXAMPLES = [
     "sab se zyada bikne wali 5 cheezein", "har mahine ki bikri", "kitne customers hain",
 ]
 
+# the examples on the home page; the page runs the first one when it loads
+DEMO_QUESTIONS = frozenset({
+    "top 5 products by revenue last quarter", "monthly revenue in 2011",
+    "is mahine sab se zyada bikne wali cheez", "revenue by country",
+})
+
 
 def _find_dim(q: str) -> str | None:
     m = re.search(r"\b(?:by|per|each|every|across|for each|group(?:ed)? by)\s+(?:the\s+)?(\w+(?: \w+)?)", q)
@@ -154,10 +162,15 @@ def _filters(q: str, countries: list[str], categories: list[str]) -> tuple[list[
         days = n * {"day": 1, "week": 7, "month": 30}[unit]
         where.append(f"o.order_date >= date((SELECT MAX(order_date) FROM orders), '-{days} day')")
         notes.append(f"last {n} {unit}s, counted back from the newest order in the data")
-    elif re.search(r"\blast month\b", q):
+    elif re.search(r"\b(?:last|this) quarter\b", q):
+        qx = "substr({c},1,4) || '-Q' || ((CAST(substr({c},6,2) AS INTEGER)+2)/3)"
+        where.append(qx.format(c="o.order_date") + " = (SELECT " + qx.format(c="MAX(order_date)")
+                     + " FROM orders)")
+        notes.append("the most recent quarter in the data")
+    elif re.search(r"\b(?:last|this) month\b", q):
         where.append("substr(o.order_date,1,7) = (SELECT substr(MAX(order_date),1,7) FROM orders)")
         notes.append("the most recent month in the data")
-    elif re.search(r"\blast year\b", q):
+    elif re.search(r"\b(?:last|this) year\b", q):
         where.append("substr(o.order_date,1,4) = (SELECT substr(MAX(order_date),1,4) FROM orders)")
         notes.append("the most recent year in the data")
     ym = re.search(r"\b(19\d\d|20\d\d)\b", q)
@@ -203,8 +216,10 @@ def compose(
 ) -> dict[str, Any] | None:
     """Deterministic question -> SQL for the canonical schema, or None when nothing fits."""
     q, lang = normalise(question)
-    dim = _find_dim(q)
-    metric = _find_metric(q, dim)
+    # "last quarter" / "this month" are periods, not the thing to group by
+    qd = re.sub(r"\b(?:last|this) (?:quarter|month|year)\b", " ", q)
+    dim = _find_dim(qd)
+    metric = _find_metric(qd, dim)
     asc = bool(re.search(LOW_WORDS, q))
     ranked = bool(re.search(TOP_WORDS, q)) or asc
     nm = re.search(r"\b(?:top|bottom|best|worst|highest|lowest|biggest|first|least|most)\s+(\d{1,3})\b", q) \

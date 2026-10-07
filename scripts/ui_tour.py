@@ -57,7 +57,22 @@ def main(base: str, out: str, pins_file: str) -> int:
 
         pg.goto(base + "/#/")
         pg.wait_for_selector(".kpi")
+        pg.wait_for_selector("#t-out .sqlview")
         shot("01-dashboard")
+        # the Try-it panel: every example chip must come back with SQL, a table and a chart from the real API
+        for i in range(4):
+            pg.click(f"#t-chips .chip >> nth={i}")
+            pg.wait_for_selector("#t-out .skel", state="detached")
+            pg.wait_for_selector("#t-out .sqlview")
+            q = pg.input_value("#t-q")
+            rows = pg.inner_text("#t-out .timing")
+            assert pg.query_selector("#t-out svg.chart, #t-out .kpi") and pg.query_selector("#t-out table"), q
+            print(f"try-it: {q!r} -> {rows}")
+            if i == 2:
+                assert pg.query_selector("#t-out .badge.gold"), "Roman Urdu badge missing"
+                shot("16-try-it-roman-urdu", full=False)
+        pg.click("#t-chips .chip >> nth=0")
+        pg.wait_for_selector("#t-out .sqlview")
         pg.wait_for_selector("#login")
         shot("14-sign-in", full=False)
         sign_in("Amna Khan")
