@@ -127,10 +127,11 @@ async function runHero(q, preview = false) {
   $("#t-out").innerHTML = html;
   $("#t-go").disabled = false;
 }
-const heroHtml = () => `<section class="hero page-in" aria-label="Try it">
+const heroHtml = () => `<section class="hero page-in" aria-label="Try it"><svg class="hero-art" viewBox="0 0 380 200" aria-hidden="true"><defs><linearGradient id="ha" x1="0" x2="1"><stop offset="0" stop-color="#8b6dff"/><stop offset=".55" stop-color="#3ee8a5"/><stop offset="1" stop-color="#ffb454"/></linearGradient><linearGradient id="hb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3ee8a5" stop-opacity=".35"/><stop offset="1" stop-color="#3ee8a5" stop-opacity="0"/></linearGradient></defs><path d="M0 170C40 150 60 160 90 130S140 90 175 105 235 70 270 50 330 30 380 8V200H0z" fill="url(#hb)"/><path d="M0 170C40 150 60 160 90 130S140 90 175 105 235 70 270 50 330 30 380 8" fill="none" stroke="url(#ha)" stroke-width="4" stroke-linecap="round" style="filter:drop-shadow(0 0 10px #3ee8a5)"/><circle cx="270" cy="50" r="7" fill="#fff" style="filter:drop-shadow(0 0 10px #ffb454)"/><circle cx="270" cy="50" r="16" fill="none" stroke="#ffb454" stroke-opacity=".5"/></svg>
     <span class="kicker"><i></i>Try it, live</span>
     <h1>Ask your numbers in plain English or Roman Urdu.</h1>
     <p class="sub">Type a business question. You get the SQL that answers it, the result table and a chart, produced right now by this app against its own data. Nothing can write to your data. &ldquo;Revenue&rdquo; means net revenue, completed sales minus cancellations; say &ldquo;gross revenue&rdquo; for the figure before cancellations.</p>
+    <div class="hero-stats"><div><b>0</b><span>models needed</span></div><div><b>1</b><span>SELECT, read-only</span></div><div><b>2</b><span>languages</span></div></div>
     <div class="tryit">
       <div class="pane"><div class="tag"><b>1</b>Your question<span class="badge acc">no sign-in needed</span></div>
         <label class="sr" for="t-q" style="position:absolute;left:-9999px">Business question</label>

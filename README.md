@@ -4,6 +4,13 @@ An AI back office for a small business that runs on your own computer, with no G
 
 Connect a database or drop in a spreadsheet and you can ask it questions in English or Roman Urdu and see the SQL it ran, forecast demand with totals that add up, get odd orders and refunds flagged with reasons, score customers with a points scorecard and a fairness panel, push refunds and credit-limit changes through approval gates with a tamper-evident audit trail, and watch the KPIs on a dashboard. Everything is offline; a language model is optional and never trusted.
 
+| Before (emerald, teal, gold) | After (midnight aurora, money green, electric violet) |
+|---|---|
+| ![Before](docs/screenshots/redesign/before/home-dark-desktop.png) | ![After](docs/screenshots/redesign/after/home-dark-desktop.png) |
+| ![Before, light](docs/screenshots/redesign/before/dashboard-light-desktop.png) | ![After, light](docs/screenshots/redesign/after/dashboard-light-desktop.png) |
+
+Full set (home, dashboard, ask; dark and light; desktop and 390 px) is in `docs/screenshots/redesign/`. The design notes are in [docs/MOTION.md](docs/MOTION.md).
+
 ![Home: the Try-it panel and KPI cards with sparklines](docs/screenshots/01-dashboard.png)
 
 ## Try it (input, output)

@@ -46,3 +46,37 @@ nav bar; emerald for focus rings, ripples and the card spotlight.
 `static/motion.js` is delegated, so pages need no changes: it wraps `fetch` to attribute a request to the button
 clicked within the previous 150 ms, watches `#app` with a MutationObserver for new cards and KPIs, and exposes
 `Motion.shake(el)` for invalid input.
+
+## Visual redesign
+
+Research (read 2026-10-07; the design-system pages are third-party write-ups, not first-party specs):
+
+- Linear's own redesign post, https://linear.app/now/how-we-redesigned-the-linear-ui : themes generated in LCH so equal
+  lightness looks equal, chrome made more neutral, Inter Display for headings and plain Inter for body, contrast raised
+  (text lighter in dark mode, darker in light mode).
+- Summary of Linear's system: https://open-design.ai/plugins/design-system-linear-app/ : near-achromatic dark surfaces,
+  hierarchy carried by white-opacity steps, one brand accent used sparingly, tight negative letter-spacing on display sizes.
+- Mercury: https://www.925studios.co/blog/mercury-design-breakdown : indigo-black (about #171721), never pure black; green means
+  growth, red and yellow are kept for errors and warnings.
+- Vercel Geist: https://blakecrosley.com/guides/design/vercel : dark treated as the default, density over decoration.
+- 2026 fintech trends: https://abduzeedo.com/gudrix-agencys-fintech-ui-design-ai-product-app and
+  https://trends.daisyui.com/trend/glassmorphism/ : deep dark palettes with high-contrast type, gradients as the most
+  requested device, frosted panels (about 16 px blur) with semi-transparent borders.
+
+The 5 moves taken from them:
+
+1. Ink, not black: a midnight-indigo base (#070817) with a fixed aurora mesh (violet, money-green, rose) behind everything,
+   so depth comes from light rather than from borders. Light mode is lavender paper with the same mesh, never flat white.
+2. Layered glass: cards are translucent with a 16 px blur, a 1 px semi-transparent border and an inner top highlight; hover
+   adds a violet ring and a pointer spotlight.
+3. One loud display face for numbers and headings: Sora (bundled, offline) with tight negative tracking for the hero, KPI
+   values and card titles; Manrope stays for text.
+4. Colour with a job: green stays the money colour (revenue, up-deltas, bars); electric violet is the action colour
+   (buttons, focus, active nav); amber and rose are warm accents. Each KPI owns one hue that tints its hairline, glow
+   corner and sparkline.
+5. Data ink that glows: chart bars and areas use gradient fills, lines get a soft glow and end dots, grids are dashed and
+   faint; empty states carry an inline SVG illustration; the SQL panel is always ink so code pops in both themes.
+
+Palette (dark / light): ink #070817 / lavender #f1effb; text #eef0ff / #12132e; muted #a6abd3 / #50557c; violet action
+#b9a8ff text, button gradient #7d4fff to #5a3df0; money green #3ee8a5 / #047857; amber #ffb454; rose #ff6fa5; cyan #3dd6f5.
+Categorical set c1..c6: green, violet, amber, rose, cyan, orange. Motion tokens and behaviour are unchanged.

@@ -1,4 +1,4 @@
-"""Draw the app icon (two white bars and a gold bar on an emerald-to-teal tile) and write assets/analyst-in-a-box.ico.
+"""Draw the app icon (lavender, amber and money-green bars on a violet-to-indigo tile) and write assets/analyst-in-a-box.ico.
 
 Pure standard library: pixels are computed here and stored as PNG entries inside the .ico.
 """
@@ -10,7 +10,7 @@ import zlib
 from pathlib import Path
 
 SS = 3  # supersampling per axis
-BARS = [(0.28, 0.54), (0.50, 0.38), (0.72, 0.22)]  # x centre, top (fraction of height); the last is gold
+BARS = [(0.28, 0.54), (0.50, 0.38), (0.72, 0.22)]  # x centre, top (fraction of height); lavender, amber, money green
 
 
 def inside_tile(x: float, y: float, s: float) -> bool:
@@ -20,7 +20,7 @@ def inside_tile(x: float, y: float, s: float) -> bool:
 
 
 def in_bar(x: float, y: float, s: float) -> int:
-    """0 outside the bars, 1 inside a white bar, 2 inside the gold bar."""
+    """0 outside the bars, 1 lavender bar, 3 amber bar, 2 money-green bar."""
     w = s * 0.075
     for n, (cx, top) in enumerate(BARS):
         x0, x1, y0, y1 = cx * s - w, cx * s + w, top * s, s * 0.78
@@ -29,7 +29,7 @@ def in_bar(x: float, y: float, s: float) -> int:
         for ex, ey in ((cx * s, y0 + rr), (cx * s, y1 - rr)):
             hit = hit or (x - ex) ** 2 + (y - ey) ** 2 <= rr * rr
         if hit:
-            return 2 if n == len(BARS) - 1 else 1
+            return 2 if n == len(BARS) - 1 else (3 if n == 1 else 1)
     return 0
 
 
@@ -38,7 +38,7 @@ def render(size: int) -> bytes:
     for py in range(size):
         row = bytearray([0])
         for px in range(size):
-            cov = white = gold = 0
+            cov = white = gold = amber = 0
             for sy in range(SS):
                 for sx in range(SS):
                     x, y = px + (sx + 0.5) / SS, py + (sy + 0.5) / SS
@@ -47,14 +47,17 @@ def render(size: int) -> bytes:
                         hit = in_bar(x, y, size)
                         white += hit == 1
                         gold += hit == 2
+                        amber += hit == 3
             n = SS * SS
             if cov == 0:
                 row += bytes([0, 0, 0, 0])
             else:
-                u = (px + py) / (2 * size)  # emerald (5,150,105) to teal (15,118,110) along the diagonal
-                base = (5 + 10 * u, 150 - 32 * u, 105 + 5 * u)
-                tw, tg = white / cov, gold / cov
-                r, g, b = (round(base[i] * (1 - tw - tg) + 255 * tw + (242, 193, 78)[i] * tg) for i in range(3))
+                u = (px + py) / (2 * size)  # violet (139,92,255) to deep indigo (36,20,119) along the diagonal
+                base = [139 - 103 * u, 92 - 72 * u, 255 - 136 * u]
+                hl = max(0.0, 1 - (((px / size - 0.2) ** 2 + (py / size - 0.1) ** 2) ** 0.5) / 0.8) * 0.35  # top-left sheen
+                base = [c + (255 - c) * hl for c in base]
+                tw, tg, ta = white / cov, gold / cov, amber / cov
+                r, g, b = (round(base[i] * (1 - tw - tg - ta) + (217, 208, 255)[i] * tw + (62, 232, 165)[i] * tg + (255, 180, 84)[i] * ta) for i in range(3))
                 row += bytes([r, g, b, round(255 * cov / n)])
         rows.append(bytes(row))
     raw = b"".join(rows)
