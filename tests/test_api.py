@@ -185,3 +185,28 @@ def test_dashboard_cards_carry_weekly_sparklines(client):
     for k in ("revenue", "orders", "aov", "customers", "refund_rate"):
         assert len(cards[k]["spark"]) == 13
     assert sum(cards["orders"]["spark"]) > 0
+
+
+def test_cache_busting_and_revalidation(client):
+    import re
+
+    from analyst_in_a_box import app as appmod
+
+    page = client.get("/")
+    assert page.headers["cache-control"] == "no-cache"
+    urls = re.findall(r'(?:src|href)="(/static/[^"]+)"', page.text)
+    css = [u for u in urls if u.endswith(".css") or ".css?" in u]
+    assert css and all("?v=" in u for u in urls if "/fonts/" not in u)
+    assert "/static/fonts/manrope-latin.woff2" in page.text  # fonts stay unversioned (the CSS requests the same URL)
+    asset = client.get(css[0])
+    assert asset.status_code == 200 and asset.headers["cache-control"] == "no-cache"
+    # the version follows the content: change a file, the id changes
+    before = appmod._build_id()
+    f = appmod.STATIC / "style.css"
+    orig = f.read_bytes()
+    try:
+        f.write_bytes(orig + b"\n/* bump */")
+        assert appmod._build_id() != before and appmod._build_id() in client.get("/").text
+    finally:
+        f.write_bytes(orig)
+    assert appmod._build_id() == before

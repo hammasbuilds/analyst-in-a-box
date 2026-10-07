@@ -1,4 +1,4 @@
-"""Draw the app icon (lavender, amber and money-green bars on a violet-to-indigo tile) and write assets/analyst-in-a-box.ico.
+"""Draw the app icon (lavender, amber and coral bars on a violet-to-indigo tile) and write assets/analyst-in-a-box.ico.
 
 Pure standard library: pixels are computed here and stored as PNG entries inside the .ico.
 """
@@ -10,7 +10,7 @@ import zlib
 from pathlib import Path
 
 SS = 3  # supersampling per axis
-BARS = [(0.28, 0.54), (0.50, 0.38), (0.72, 0.22)]  # x centre, top (fraction of height); lavender, amber, money green
+BARS = [(0.28, 0.54), (0.50, 0.38), (0.72, 0.22)]  # x centre, top (fraction of height); lavender, amber, coral
 
 
 def inside_tile(x: float, y: float, s: float) -> bool:
@@ -20,7 +20,7 @@ def inside_tile(x: float, y: float, s: float) -> bool:
 
 
 def in_bar(x: float, y: float, s: float) -> int:
-    """0 outside the bars, 1 lavender bar, 3 amber bar, 2 money-green bar."""
+    """0 outside the bars, 1 lavender bar, 3 amber bar, 2 coral bar."""
     w = s * 0.075
     for n, (cx, top) in enumerate(BARS):
         x0, x1, y0, y1 = cx * s - w, cx * s + w, top * s, s * 0.78
@@ -57,7 +57,7 @@ def render(size: int) -> bytes:
                 hl = max(0.0, 1 - (((px / size - 0.2) ** 2 + (py / size - 0.1) ** 2) ** 0.5) / 0.8) * 0.35  # top-left sheen
                 base = [c + (255 - c) * hl for c in base]
                 tw, tg, ta = white / cov, gold / cov, amber / cov
-                r, g, b = (round(base[i] * (1 - tw - tg - ta) + (217, 208, 255)[i] * tw + (62, 232, 165)[i] * tg + (255, 180, 84)[i] * ta) for i in range(3))
+                r, g, b = (round(base[i] * (1 - tw - tg - ta) + (217, 208, 255)[i] * tw + (255, 138, 91)[i] * tg + (255, 180, 84)[i] * ta) for i in range(3))
                 row += bytes([r, g, b, round(255 * cov / n)])
         rows.append(bytes(row))
     raw = b"".join(rows)

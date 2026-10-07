@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -9,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -31,6 +33,45 @@ from . import (
 )
 
 STATIC = Path(__file__).parent / "static"
+
+
+class _RevalidatingStatic(StaticFiles):
+    """Static files are always revalidated (ETag / Last-Modified), so a reload shows the newest UI."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+_ASSET_SUFFIXES = {".css", ".js", ".svg"}
+_build_cache: dict[tuple[tuple[str, int, int], ...], str] = {}
+
+
+def _build_id() -> str:
+    """Short content hash over the CSS, JS and SVG assets: it changes whenever any of them does."""
+    files = [f for f in sorted(STATIC.rglob("*")) if f.is_file() and f.suffix in _ASSET_SUFFIXES]
+    sig = tuple((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in files)
+    if sig not in _build_cache:
+        h = hashlib.sha256()
+        for f in files:
+            h.update(f.name.encode())
+            h.update(f.read_bytes())
+        _build_cache.clear()
+        _build_cache[sig] = h.hexdigest()[:10]
+    return _build_cache[sig]
+
+
+_ASSET_URL = re.compile(r"""(?P<q>["'])(?P<u>/static/(?!fonts/)[^"'?]+)(?P=q)""")
+
+
+def _versioned_index() -> str:
+    """index.html with ?v=<build id> on every /static/ URL, so the browser fetches changed assets by a new URL."""
+    v = _build_id()
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    return _ASSET_URL.sub(lambda m: f"{m['q']}{m['u']}?v={v}{m['q']}", html)
+
+
 COOKIE = "aib_session"
 LOOPBACK = {"127.0.0.1", "localhost", "[::1]", "::1", "testserver"}
 CSP = ("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
@@ -552,8 +593,8 @@ def create_app(db_path: str | Path | None = None, allowed_hosts: list[str] | Non
 
     # ---- the page ---------------------------------------------------------------------
     @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
+    def index() -> Response:
+        return Response(_versioned_index(), media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
-    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    app.mount("/static", _RevalidatingStatic(directory=STATIC), name="static")
     return app

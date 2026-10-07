@@ -25,7 +25,7 @@ const Motion = (() => {
     dot.addEventListener("animationend", () => dot.remove());
   });
 
-  /* A button that triggers a request shows a spinner until it settles, then flashes green or red. */
+  /* A button that triggers a request shows a spinner until it settles, then flashes cyan or red. */
   let lastBtn = null, lastT = 0;
   document.addEventListener("click", (e) => {
     const b = e.target.closest && e.target.closest("button.btn");

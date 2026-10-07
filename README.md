@@ -4,12 +4,12 @@ An AI back office for a small business that runs on your own computer, with no G
 
 Connect a database or drop in a spreadsheet and you can ask it questions in English or Roman Urdu and see the SQL it ran, forecast demand with totals that add up, get odd orders and refunds flagged with reasons, score customers with a points scorecard and a fairness panel, push refunds and credit-limit changes through approval gates with a tamper-evident audit trail, and watch the KPIs on a dashboard. Everything is offline; a language model is optional and never trusted.
 
-| Before (emerald, teal, gold) | After (midnight aurora, money green, electric violet) |
+| Old (midnight aurora with money green) | New (royal indigo, electric violet, coral-to-amber sunset, cyan) |
 |---|---|
-| ![Before](docs/screenshots/redesign/before/home-dark-desktop.png) | ![After](docs/screenshots/redesign/after/home-dark-desktop.png) |
-| ![Before, light](docs/screenshots/redesign/before/dashboard-light-desktop.png) | ![After, light](docs/screenshots/redesign/after/dashboard-light-desktop.png) |
+| ![Old green, dark](docs/screenshots/redesign/green/home-dark-desktop.png) | ![New indigo, dark](docs/screenshots/redesign/indigo/home-dark-desktop.png) |
+| ![Old green, light dashboard](docs/screenshots/redesign/green/dashboard-light-desktop.png) | ![New indigo, light dashboard](docs/screenshots/redesign/indigo/dashboard-light-desktop.png) |
 
-Full set (home, dashboard, ask; dark and light; desktop and 390 px) is in `docs/screenshots/redesign/`. The design notes are in [docs/MOTION.md](docs/MOTION.md).
+Full sets (home, dashboard, ask; dark and light; desktop and 390 px) are in `docs/screenshots/redesign/green` and `docs/screenshots/redesign/indigo`. The page and every static asset are revalidated on each load (`Cache-Control: no-cache`, content-hashed `?v=` URLs), so a reload always shows the newest UI. The design notes are in [docs/MOTION.md](docs/MOTION.md).
 
 ![Home: the Try-it panel and KPI cards with sparklines](docs/screenshots/01-dashboard.png)
 
@@ -116,7 +116,7 @@ All from the real UI, produced by `scripts/ui_tour.py`, which fails on any unexp
 
 ## Interaction
 
-Pure CSS and one small vanilla JS file (`static/motion.js`), no build step. Buttons ripple from the pointer, press to 0.97 and show a spinner while their request runs, then flash green or red. Cards lift with a pointer spotlight, KPI numbers roll up, charts draw in, the toast springs up, and an empty question shakes the field. Everything is switched off under `prefers-reduced-motion`. Research and tokens: [docs/MOTION.md](docs/MOTION.md).
+Pure CSS and one small vanilla JS file (`static/motion.js`), no build step. Buttons ripple from the pointer, press to 0.97 and show a spinner while their request runs, then flash cyan or red. Cards lift with a pointer spotlight, KPI numbers roll up, charts draw in, the toast springs up, and an empty question shakes the field. Everything is switched off under `prefers-reduced-motion`. Research and tokens: [docs/MOTION.md](docs/MOTION.md).
 
 ![Run button busy while the answer loads](docs/screenshots/17-interaction-button-busy.png)
 ![Empty question: field shakes, error toast](docs/screenshots/18-interaction-shake-toast.png)
