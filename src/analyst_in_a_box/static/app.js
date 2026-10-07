@@ -1,0 +1,445 @@
+/* Analyst-in-a-Box: single-page app. No build step; talks to /api/*. */
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = Charts.esc;
+const S = { state: null, actor: null, route: "" };
+
+const gbp = (v) => (v == null ? "-" : (v < 0 ? "-£" : "£") + Math.abs(v).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const gbp0 = (v) => (v == null ? "-" : (v < 0 ? "-£" : "£") + Math.abs(Math.round(v)).toLocaleString("en-GB"));
+const num = (v, d = 0) => (v == null ? "-" : Number(v).toLocaleString("en-GB", { maximumFractionDigits: d }));
+const pct = (v, d = 1) => (v == null ? "-" : (v * 100).toFixed(d) + "%");
+
+async function api(path, opts = {}) {
+  const o = { headers: {}, ...opts };
+  if (o.body && !(o.body instanceof FormData)) { o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(o.body); }
+  const r = await fetch(path, o);
+  let data = null;
+  try { data = await r.json(); } catch (e) { /* not json */ }
+  if (!r.ok) throw new Error((data && data.detail && (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail))) || r.statusText);
+  return data;
+}
+const post = (p, body) => api(p, { method: "POST", body });
+let toastT;
+function toast(msg, bad) {
+  const t = $("#toast"); t.textContent = msg; t.style.background = bad ? "var(--bad)" : ""; t.style.color = bad ? "#fff" : "";
+  t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), bad ? 6000 : 2800);
+}
+const busy = (el, on) => { if (el) { el.disabled = on; } };
+const loading = (msg = "Working") => `<div class="empty"><span class="spin"></span> ${esc(msg)}…</div>`;
+const err = (e) => `<div class="note bad">${esc(e.message || e)}</div>`;
+const head = (title, sub, extra = "") => `<div class="pagehead"><div><h1>${esc(title)}</h1><p>${sub}</p></div>${extra}</div>`;
+
+const ICONS = {
+  dashboard: "M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 3v6h8V3z",
+  data: "M12 3C7 3 4 4.5 4 6.5v11C4 19.5 7 21 12 21s8-1.5 8-3.5v-11C20 4.5 17 3 12 3zM4 12c0 2 3 3.5 8 3.5s8-1.5 8-3.5",
+  ask: "M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+  forecast: "M3 17l6-6 4 4 8-9M15 6h6v6",
+  alerts: "M12 3l10 18H2zM12 10v5M12 18v.5",
+  risk: "M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5zM9 12l2 2 4-4",
+  workflows: "M4 6h16M4 12h16M4 18h10M18 16l2 2 3-4",
+};
+const NAV = [
+  ["", "Dashboard", "dashboard"], ["data", "Data", "data"], ["ask", "Ask your data", "ask"],
+  ["forecast", "Forecasts", "forecast"], ["alerts", "Fraud & anomalies", "alerts"],
+  ["risk", "Customer risk", "risk"], ["workflows", "Workflows", "workflows"],
+];
+
+function renderNav(counts = {}) {
+  $("#nav").innerHTML = NAV.map(([r, label, ic]) =>
+    `<a href="#/${r}" data-r="${r}" class="${S.route === r ? "active" : ""}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[ic]}"/></svg><span class="t">${label}</span>${counts[r] ? `<span class="badge acc">${counts[r]}</span>` : ""}</a>`).join("");
+}
+
+/* ---------------------------------------------------------------- router */
+const PAGES = {};
+async function route() {
+  const r = (location.hash.replace(/^#\//, "").split("?")[0]) || "";
+  S.route = PAGES[r] ? r : "";
+  renderNav(S.counts);
+  const app = $("#app");
+  app.innerHTML = loading();
+  try { await PAGES[S.route](app); } catch (e) { app.innerHTML = head("Something went wrong", "") + err(e); }
+}
+window.addEventListener("hashchange", route);
+
+async function refreshCounts() {
+  try {
+    const t = await api("/api/tickets?status=pending");
+    S.counts = { workflows: t.tickets.length || "" };
+  } catch (e) { S.counts = {}; }
+  renderNav(S.counts);
+}
+
+/* ---------------------------------------------------------------- dashboard */
+PAGES[""] = async (app) => {
+  const d = await api("/api/dashboard");
+  if (!d.canonical) { app.innerHTML = head("Dashboard", "Key numbers for the business") + `<div class="note warn">${esc(d.message)}</div>`; return; }
+  const fmt = { gbp: gbp0, count: (v) => (v == null ? "-" : num(v)), pct: (v) => v + "%" };
+  const card = (c) => `<div class="kpi"><div class="l">${esc(c.label)}</div><div class="v">${fmt[c.unit](c.value)}</div>${c.change_pct == null ? '<div class="delta muted">&nbsp;</div>' : `<div class="delta ${c.change_pct >= 0 ? "up" : "down"}">${c.change_pct >= 0 ? "▲" : "▼"} ${Math.abs(c.change_pct)}% vs prior 30 days</div>`}</div>`;
+  app.innerHTML = head("Dashboard", `Everything as of <b>${esc(d.as_of)}</b>, the newest order in the data. ${num(d.totals.orders)} orders, ${num(d.totals.customers)} customers, ${num(d.totals.products)} products.`)
+    + `<div class="kpis">${d.cards.map(card).join("")}</div>`
+    + `<div class="grid cols-2">
+      <div class="card"><h2>Revenue by month</h2>${Charts.columns({ rows: d.charts.monthly_revenue, fmt: (v) => "£" + Charts.compact(v), highlightLast: d.last_month_partial })}${d.last_month_partial ? '<p class="small muted">The newest month is partial, so its bar is faded.</p>' : ""}</div>
+      <div class="card"><h2>Revenue by country</h2>${Charts.bars({ rows: d.charts.revenue_by_country, fmt: (v) => "£" + Charts.compact(v), color: "var(--c2)" })}</div>
+      <div class="card"><h2>Top products by revenue</h2>${Charts.bars({ rows: d.charts.top_products, fmt: (v) => "£" + Charts.compact(v), color: "var(--c3)", labelW: 190 })}</div>
+      <div class="card"><h2>Revenue by category</h2>${Charts.bars({ rows: d.charts.revenue_by_category, fmt: (v) => "£" + Charts.compact(v), color: "var(--c5)", labelW: 150 })}<p class="small muted">Categories are derived from product descriptions by keyword rules.</p></div>
+    </div>`;
+};
+
+/* ---------------------------------------------------------------- data */
+PAGES.data = async (app) => {
+  const [srcs, sch, fields] = await Promise.all([api("/api/sources"), api("/api/schema"), api("/api/sales-fields")]);
+  const active = srcs.find((s) => s.active);
+  const tableCard = (t) => `<details class="card" style="padding:12px 16px"><summary>${esc(t.name)} <span class="muted small">${t.rows == null ? "" : num(t.rows) + " rows · "}${t.columns.length} columns</span></summary>
+    <div class="scroll" style="max-height:260px;margin-top:8px"><table><thead><tr>${t.columns.map((c) => `<th>${esc(c.name)}<div class="muted" style="text-transform:none;font-weight:400">${esc(c.type)}</div></th>`).join("")}</tr></thead>
+    <tbody>${t.sample.map((r) => `<tr>${r.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
+  app.innerHTML = head("Data", "Connect a database or upload sheets. Everything you ask is read-only.")
+    + `<div class="grid cols-2">
+      <div class="card"><h2>Sources</h2>
+        <table><tbody>${srcs.map((s) => `<tr><td><b>${esc(s.name)}</b><div class="small muted">${esc(s.kind)} · ${esc(s.location)}</div></td>
+          <td class="num">${s.active ? '<span class="badge good">active</span>' : `<button class="btn ghost small" data-act="use" data-id="${s.id}">Use</button>`}
+          ${["sqlite", "postgres"].includes(s.kind) ? `<button class="btn ghost small" data-act="rm" data-id="${s.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table>
+        <details style="margin-top:12px"><summary>Connect SQLite or PostgreSQL</summary>
+          <div class="stack" style="margin-top:8px">
+            <label class="f">Kind<select id="s-kind"><option value="sqlite">SQLite file</option><option value="postgres">PostgreSQL URL</option></select></label>
+            <label class="f">Path or URL<input type="text" id="s-loc" placeholder="C:\\data\\shop.sqlite3  or  postgresql://user:pass@host:5432/db"></label>
+            <label class="f">Name (optional)<input type="text" id="s-name"></label>
+            <button class="btn" data-act="connect">Connect</button>
+            <p class="small muted">PostgreSQL needs the optional driver (<span class="mono">uv sync --extra postgres</span>). Connections are opened read-only. Questions and the schema browser work on both; the dashboard, forecasts, fraud screen and risk need the SQLite order tables.</p>
+          </div></details></div>
+      <div class="card"><h2>Upload CSV or Excel</h2>
+        <div class="drop" id="drop"><p>Drop a .csv, .tsv or .xlsx file here</p><input type="file" id="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm"></div>
+        <p class="small muted">Each sheet becomes a table in "My uploads"; column types are inferred, and the upload becomes the active source.</p><div id="up-msg"></div></div>
+    </div>`
+    + `<div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">Schema of ${esc(sch.source)}</h2><span class="badge ${sch.canonical ? "good" : ""}">${sch.canonical ? "business tables present" : "generic tables"}</span></div>
+      <div class="stack" style="margin-top:12px">${sch.tables.map(tableCard).join("") || '<div class="empty">No tables.</div>'}</div></div>`
+    + (active && active.kind === "upload" && sch.tables.length ? `<div class="card" style="margin-top:16px"><h2>Use an uploaded sheet as your sales data</h2>
+      <p class="muted small">Map one sheet of order lines (one row per product on an order) and every module works on it: dashboard, forecasts, fraud, risk. It builds customers, products, orders, order_items and payments in the uploads database.</p>
+      <div class="grid cols-3"><label class="f">Sheet<select id="m-table">${sch.tables.filter((t) => !["customers", "products", "orders", "order_items", "payments"].includes(t.name)).map((t) => `<option>${esc(t.name)}</option>`).join("")}</select></label>
+      ${Object.entries(fields).map(([k, d]) => `<label class="f">${esc(d)}<select data-map="${k}"><option value=""></option></select></label>`).join("")}</div>
+      <div class="row" style="margin-top:12px"><button class="btn" data-act="map">Build the business tables</button><span id="m-msg" class="small"></span></div></div>` : "");
+  const fillMap = () => {
+    const t = sch.tables.find((x) => x.name === ($("#m-table") || {}).value); if (!t) return;
+    const guess = { invoice: /invoice|order/i, stock_code: /stock|sku|code|product/i, description: /desc|name/i, quantity: /qty|quantity/i, date: /date/i, price: /price|unit/i, customer: /customer|client/i, country: /country/i };
+    $$("[data-map]").forEach((sel) => {
+      sel.innerHTML = '<option value=""></option>' + t.columns.map((c) => `<option>${esc(c.name)}</option>`).join("");
+      const g = t.columns.find((c) => guess[sel.dataset.map].test(c.name)); if (g) sel.value = g.name;
+    });
+  };
+  if ($("#m-table")) { fillMap(); $("#m-table").onchange = fillMap; }
+  const up = async (file) => {
+    if (!file) return; const fd = new FormData(); fd.append("file", file);
+    $("#up-msg").innerHTML = loading("Importing");
+    try { const r = await api("/api/upload", { method: "POST", body: fd }); toast(`Imported ${r.tables.map((t) => t.table + " (" + t.rows + " rows)").join(", ")}`); route(); }
+    catch (e) { $("#up-msg").innerHTML = err(e); }
+  };
+  $("#file").onchange = (e) => up(e.target.files[0]);
+  const drop = $("#drop");
+  ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => up(e.dataTransfer.files[0]));
+  app.onclick = async (e) => {
+    const b = e.target.closest("[data-act]"); if (!b) return;
+    try {
+      if (b.dataset.act === "use") { await post(`/api/sources/${b.dataset.id}/activate`, {}); await boot(); route(); }
+      if (b.dataset.act === "rm") { await api(`/api/sources/${b.dataset.id}`, { method: "DELETE" }); await boot(); route(); }
+      if (b.dataset.act === "connect") { await post("/api/sources", { kind: $("#s-kind").value, location: $("#s-loc").value, name: $("#s-name").value || null }); toast("Connected"); await boot(); route(); }
+      if (b.dataset.act === "map") {
+        const mapping = {}; $$("[data-map]").forEach((s) => { if (s.value) mapping[s.dataset.map] = s.value; });
+        $("#m-msg").innerHTML = '<span class="spin"></span>';
+        const r = await post(`/api/sources/${active.id}/map-sales`, { table: $("#m-table").value, mapping });
+        toast(`Built ${r.orders} orders for ${r.customers} customers (${r.rows_skipped} rows skipped)`); await boot(); route();
+      }
+    } catch (x) { toast(x.message, true); if ($("#m-msg")) $("#m-msg").textContent = ""; }
+  };
+};
+
+/* ---------------------------------------------------------------- ask */
+function resultChart(res) {
+  const c = res.chart; if (!c) return "";
+  const ci = (n) => res.columns.indexOf(n);
+  if (c.type === "stat") return `<div class="kpis">${c.y.map((n) => `<div class="kpi"><div class="l">${esc(n)}</div><div class="v">${fmtCell(n, res.rows[0][ci(n)])}</div></div>`).join("")}</div>`;
+  const xi = ci(c.x);
+  const money = /revenue|refund|value|spend|total|amount|price|sales/i.test(c.y[0]);
+  const f = money ? (v) => "£" + Charts.compact(v) : Charts.compact;
+  if (c.type === "line") return Charts.line({ labels: res.rows.map((r) => r[xi]), series: c.y.map((n) => ({ name: n, values: res.rows.map((r) => r[ci(n)]) })), fmt: f });
+  if (res.rows.length > 25) return Charts.columns({ rows: res.rows.map((r) => [r[xi], r[ci(c.y[0])]]), fmt: f });
+  return Charts.bars({ rows: res.rows.map((r) => [r[xi], r[ci(c.y[0])]]), fmt: f, labelW: 180 });
+}
+function fmtCell(name, v) {
+  if (v == null) return "";
+  if (typeof v === "number") return /revenue|refund|value|spend|total|amount|price|sales/i.test(name) ? gbp(v) : num(v, 2);
+  return esc(v);
+}
+function resultTable(res) {
+  const rows = res.rows.slice(0, 300);
+  return `<div class="scroll"><table><thead><tr>${res.columns.map((c) => `<th class="${typeof (res.rows[0] || [])[res.columns.indexOf(c)] === "number" ? "num" : ""}">${esc(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v, i) => `<td class="${typeof v === "number" ? "num" : ""}">${fmtCell(res.columns[i], v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+  <p class="small muted">${res.rows.length} row${res.rows.length === 1 ? "" : "s"}${res.rows.length > 300 ? " (first 300 shown)" : ""}${res.truncated ? ` - capped at ${S.state.max_rows} rows` : ""}</p>`;
+}
+function showResult(res) {
+  const out = $("#ask-out");
+  if (!res.ok) {
+    out.innerHTML = `<div class="card">${err({ message: res.error })}${res.sql ? `<pre class="sql" style="margin-top:10px">${esc(res.sql)}</pre>` : ""}${res.note ? `<p class="small muted">${esc(res.note)}</p>` : ""}${res.examples && res.examples.length ? `<p class="small muted">Try:</p><div class="chips">${res.examples.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>` : ""}</div>`;
+    return;
+  }
+  out.innerHTML = `<div class="card stack">
+    <div class="row"><span class="badge ${res.mode === "llm" ? "info" : "acc"}">${res.mode === "llm" ? "written by a language model" : res.mode === "edited" ? "your SQL" : "built-in parser (no model)"}</span>
+      ${res.language === "roman-ur" ? '<span class="badge warn">Roman Urdu understood</span>' : ""}
+      <span class="badge good" title="Parsed to one SELECT, then run on a read-only connection with an authoriser">read-only checked</span>
+      <span class="small muted">${esc(res.explanation || "")}</span></div>
+    ${res.note ? `<div class="note warn">${esc(res.note)}</div>` : ""}
+    ${resultChart(res)}
+    ${resultTable(res)}
+    <details open><summary>The SQL that ran</summary><textarea id="sql-box" rows="${Math.min(14, res.sql.split("\n").length + 1)}" spellcheck="false">${esc(res.sql)}</textarea>
+    <div class="row" style="margin-top:8px"><button class="btn ghost small" id="run-sql">Run edited SQL</button><button class="btn ghost small" id="copy-sql">Copy</button><span class="small muted">Edits are checked the same way: anything but one SELECT is refused.</span></div></details></div>`;
+  $("#run-sql").onclick = async () => { try { showResult(await post("/api/sql", { sql: $("#sql-box").value })); loadHistory(); } catch (e) { out.insertAdjacentHTML("afterbegin", `<div style="margin-bottom:10px">${err(e)}</div>`); } };
+  $("#copy-sql").onclick = () => { navigator.clipboard && navigator.clipboard.writeText($("#sql-box").value); toast("Copied"); };
+}
+async function loadHistory() {
+  const h = await api("/api/ask/history");
+  $("#hist").innerHTML = h.length ? h.slice(0, 8).map((x) => `<div class="row small" style="padding:3px 0"><span class="badge ${x.ok ? "" : "bad"}">${x.ok ? x.rows + " rows" : "no answer"}</span><button class="chip" data-q="${esc(x.question || "")}" ${x.question ? "" : "disabled"}>${esc(x.question || "(edited SQL)")}</button></div>`).join("") : '<span class="muted small">Nothing yet.</span>';
+}
+PAGES.ask = async (app) => {
+  const ex = await api("/api/ask/examples");
+  const hasLLM = S.state.llm.configured;
+  app.innerHTML = head("Ask your data", "Ask in English or Roman Urdu. You always see the SQL, and nothing can write to your data.")
+    + `<div class="card stack"><div class="row" style="flex-wrap:nowrap"><input type="text" id="q" placeholder="e.g. Top 10 products by revenue in 2011   |   har mahine ki bikri" autocomplete="off"><button class="btn" id="go">Ask</button></div>
+    <div class="chips">${ex.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>
+    <p class="small muted">${hasLLM ? `Language model: <b>${esc(S.state.llm.provider)}:${esc(S.state.llm.model)}</b>. Its SQL goes through the same checks, and the built-in parser answers if it fails.` : "No language model configured: questions are answered by the built-in parser, which knows revenue, orders, customers, units, refunds, averages, rankings, time breakdowns, countries and categories. Set ANALYST_LLM to add one."}</p></div>
+    <div id="ask-out" style="margin-top:16px"></div>
+    <div class="card" style="margin-top:16px"><h2>Recent questions</h2><div id="hist"></div></div>`;
+  const go = async (q) => {
+    if (!q.trim()) return; $("#q").value = q; $("#ask-out").innerHTML = loading("Asking");
+    try { showResult(await post("/api/ask", { question: q })); } catch (e) { $("#ask-out").innerHTML = err(e); }
+    loadHistory();
+  };
+  $("#go").onclick = () => go($("#q").value);
+  $("#q").onkeydown = (e) => { if (e.key === "Enter") go($("#q").value); };
+  app.onclick = (e) => { const c = e.target.closest("[data-q]"); if (c && !c.disabled) go(c.dataset.q); };
+  loadHistory();
+};
+
+/* ---------------------------------------------------------------- forecast */
+const FS = { horizon: 8, per_category: 3, method: "mint_wls", sel: "All products" };
+PAGES.forecast = async (app) => {
+  app.innerHTML = head("Forecasts", "Weekly units per product and category, forecast so the numbers add up, with a backtest that says where to trust it.")
+    + `<div class="card"><div class="row">
+      <label class="f">Weeks ahead<select id="f-h">${[4, 8, 13, 26].map((v) => `<option ${v === FS.horizon ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label class="f">Products per category<select id="f-k">${[1, 2, 3, 4, 5].map((v) => `<option ${v === FS.per_category ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label class="f">Reconciliation<select id="f-m">${[["mint_wls", "MinT (weighted)"], ["mint_ols", "MinT (OLS)"], ["bottom_up", "Bottom-up"], ["top_down", "Top-down"], ["weighted_blend", "Blend"]].map(([v, l]) => `<option value="${v}" ${v === FS.method ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <button class="btn" id="f-go" style="align-self:end">Run forecast</button></div></div><div id="f-out" style="margin-top:16px"></div>`;
+  const run = async () => {
+    FS.horizon = +$("#f-h").value; FS.per_category = +$("#f-k").value; FS.method = $("#f-m").value;
+    $("#f-out").innerHTML = loading("Forecasting and backtesting every series");
+    try { drawForecast(await api(`/api/forecast?horizon=${FS.horizon}&per_category=${FS.per_category}&method=${FS.method}`)); } catch (e) { $("#f-out").innerHTML = err(e); }
+  };
+  $("#f-go").onclick = run; await run();
+};
+function drawForecast(r) {
+  const bt = r.backtest, best = [...Object.keys(bt.by_level[0]).filter((k) => !["level", "nodes", "seasonal_naive"].includes(k))];
+  const total = r.nodes.find((n) => n.level === "total");
+  const badge = (n) => n.backtest.beats_seasonal_naive == null ? '<span class="badge">n/a</span>' : n.backtest.beats_seasonal_naive ? `<span class="badge good" title="Backtest MAE is ${n.backtest.relative_mae}x seasonal naive's">beats naive ${n.backtest.relative_mae}x</span>` : `<span class="badge warn" title="Backtest MAE is ${n.backtest.relative_mae}x seasonal naive's">naive wins ${n.backtest.relative_mae}x</span>`;
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  const order = []; const walk = (name, depth) => { const n = r.nodes.find((x) => x.name === name); order.push([n, depth]); r.nodes.filter((c) => c.parent === name).forEach((c) => walk(c.name, depth + 1)); };
+  walk(total.name, 0);
+  $("#f-out").innerHTML = `<div class="kpis">
+      <div class="kpi"><div class="l">Totals add up</div><div class="v">${r.coherent ? "Yes" : "No"}</div><div class="delta muted">before reconciling: ${r.coherent_before_reconciliation ? "yes" : "no"}</div></div>
+      <div class="kpi"><div class="l">Series beating seasonal naive</div><div class="v">${bt.nodes_beating_seasonal_naive} of ${bt.nodes_judged}</div><div class="delta muted">${bt.folds} backtest origins, ${bt.horizon} weeks each</div></div>
+      <div class="kpi"><div class="l">Forecast, all products</div><div class="v">${num(sum(total.forecast))}</div><div class="delta muted">units over ${r.horizon} weeks</div></div>
+      <div class="kpi"><div class="l">Best method at the total</div><div class="v" style="font-size:1.2rem">${esc(bt.best_method_at_total.replace("_", " "))}</div><div class="delta muted">lowest backtest error there</div></div></div>
+    <div class="grid split">
+      <div class="card"><h2 id="f-title"></h2><div id="f-chart"></div><div id="f-facts" class="small muted"></div></div>
+      <div class="card"><h2>Backtest: mean absolute error by level</h2>
+        <div class="scroll" style="max-height:none"><table><thead><tr><th>Level</th><th class="num">Seasonal naive</th>${best.map((k) => `<th class="num">${esc(k.replace("_", " "))}</th>`).join("")}</tr></thead>
+        <tbody>${bt.by_level.map((l) => { const lo = Math.min(...best.map((k) => l[k])); return `<tr><td>${esc(l.level)} <span class="muted small">(${l.nodes})</span></td><td class="num">${num(l.seasonal_naive, 1)}</td>${best.map((k) => `<td class="num" style="${l[k] === lo ? "font-weight:700;color:var(--accent)" : ""}">${num(l[k], 1)}</td>`).join("")}</tr>`; }).join("")}</tbody></table></div>
+        <p class="small muted">Units per week, averaged over the same ${bt.folds} rolling origins (${esc(bt.origins[0])} to ${esc(bt.origins[bt.origins.length - 1])}); lower is better and the best method per level is bold. Models see only the history before each origin. Demand pattern per product: ${Object.entries(r.patterns).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(", ")}.</p></div></div>
+    <div class="card" style="margin-top:16px"><h2>Every series</h2><div class="scroll"><table><thead><tr><th>Series</th><th>Pattern</th><th>Model</th><th class="num">Last 4 weeks</th><th class="num">Next ${r.horizon} weeks</th><th>Backtest vs seasonal naive</th></tr></thead>
+      <tbody>${order.map(([n, d]) => `<tr class="click" data-n="${esc(n.name)}"><td style="padding-left:${10 + d * 18}px">${d === 0 ? "<b>" : ""}${esc(n.name.split("/").pop())}${d === 0 ? "</b>" : ""}</td><td><span class="badge">${esc(n.pattern)}</span></td><td class="small">${esc(n.model)}</td><td class="num">${num(sum(n.history.slice(-4)))}</td><td class="num">${num(sum(n.forecast))}</td><td>${badge(n)}</td></tr>`).join("")}</tbody></table></div>
+      <p class="small muted">Click a row to chart it. "Other" rows hold every product of the category that is not listed, so each category and the total are real totals. ETS is exponential smoothing with a 52-week season once two years exist; Croston handles products that sell in occasional bursts. Negative forecasts are set to zero before adding up.</p></div>`;
+  const pick = (name) => {
+    FS.sel = name; const n = r.nodes.find((x) => x.name === name) || total;
+    $("#f-title").textContent = n.name;
+    const hist = n.history, labels = [...r.weeks.slice(-hist.length), ...r.future_weeks];
+    $("#f-chart").innerHTML = Charts.line({ labels, split: hist.length, series: [
+      { name: "actual units", values: [...hist, ...r.future_weeks.map(() => null)] },
+      { name: "forecast", dashed: true, color: "var(--c2)", values: [...hist.map((_, i) => (i === hist.length - 1 ? hist[i] : null)), ...n.forecast] },
+      { name: "before reconciling", dashed: true, color: "var(--c3)", values: [...hist.map(() => null), ...n.base_forecast] }] });
+    const b = n.backtest;
+    $("#f-facts").innerHTML = `Model <b>${esc(n.model)}</b> (${esc(n.pattern)}${n.adi ? `, ADI ${n.adi}, CV² ${n.cv2}` : ""}). Backtest MAE ${num(b.mae, 1)} against seasonal naive ${num(b.seasonal_naive_mae, 1)}; MASE ${b.mase ?? "n/a"}; sMAPE ${b.smape}.`;
+    $$("#f-out tr.click").forEach((tr) => tr.style.background = tr.dataset.n === name ? "var(--accent-soft)" : "");
+  };
+  $("#f-out").onclick = (e) => { const tr = e.target.closest("tr[data-n]"); if (tr) { pick(tr.dataset.n); $("#f-title").scrollIntoView({ block: "nearest", behavior: "smooth" }); } };
+  pick(r.nodes.some((n) => n.name === FS.sel) ? FS.sel : total.name);
+}
+
+/* ---------------------------------------------------------------- alerts */
+const AS = { status: "open", severity: "", kind: "" };
+PAGES.alerts = async (app) => {
+  app.innerHTML = head("Fraud & anomalies", "Odd orders, refunds and trading days, each with the reasons it was flagged.")
+    + `<div id="a-sum"></div><div class="card"><div class="row"><label class="f">Status<select id="a-st">${["open", "ticketed", "dismissed", "confirmed", ""].map((v) => `<option value="${v}" ${v === AS.status ? "selected" : ""}>${v || "any"}</option>`).join("")}</select></label>
+    <label class="f">Severity<select id="a-sv">${["", "high", "medium", "low"].map((v) => `<option value="${v}" ${v === AS.severity ? "selected" : ""}>${v || "any"}</option>`).join("")}</select></label>
+    <label class="f">Kind<select id="a-k">${[["", "any"], ["order", "orders"], ["refund", "refunds"], ["day", "trading days"]].map(([v, l]) => `<option value="${v}" ${v === AS.kind ? "selected" : ""}>${l}</option>`).join("")}</select></label></div></div>
+    <div id="a-list" style="margin-top:16px"></div>`;
+  const load = async () => {
+    AS.status = $("#a-st").value; AS.severity = $("#a-sv").value; AS.kind = $("#a-k").value;
+    $("#a-list").innerHTML = loading("Screening");
+    try {
+      const r = await api(`/api/alerts?status=${AS.status}&severity=${AS.severity}&kind=${AS.kind}&limit=60`);
+      const s = r.summary;
+      $("#a-sum").innerHTML = `<div class="kpis"><div class="kpi"><div class="l">Orders screened</div><div class="v">${num(s.orders_screened)}</div></div>
+        <div class="kpi"><div class="l">Alerts raised</div><div class="v">${num(s.alerts)}</div><div class="delta muted">${s.by_severity.high} high · ${s.by_severity.medium} medium · ${s.by_severity.low} low</div></div>
+        <div class="kpi"><div class="l">By kind</div><div class="v" style="font-size:1.1rem">${s.by_kind.order} orders · ${s.by_kind.refund} refunds · ${s.by_kind.day} days</div></div></div>
+        <div class="note" style="margin-bottom:16px">${esc(s.note)} Robust z-scores use the median and MAD, so one huge order does not hide the next.</div>`;
+      $("#a-list").innerHTML = `<p class="muted small">${r.matching} matching${r.matching > r.alerts.length ? `, showing the top ${r.alerts.length}` : ""}.</p>` + (r.alerts.map((a) => `<div class="alert ${a.severity}">
+        <div class="row"><b>${esc(a.subject)}</b><span class="badge ${a.severity}">${a.severity}</span><span class="badge">score ${a.score}</span>
+          <span class="muted small">${esc(a.date)}${a.customer_id ? " · customer " + esc(a.customer_id) : ""} · ${gbp(a.amount)}</span>
+          ${a.status !== "open" ? `<span class="badge acc">${esc(a.status)}${a.ticket_id ? " #" + a.ticket_id : ""}</span>` : ""}
+          <span class="right row">${a.status === "open" && a.kind !== "day" ? `<button class="btn small" data-ticket="${esc(a.key)}">Open review ticket</button>` : ""}${a.status === "open" ? `<button class="btn ghost small" data-dismiss="${esc(a.key)}">Dismiss</button>` : ""}</span></div>
+        <ul>${a.reasons.map((x) => `<li>${esc(x.text)} <span class="muted small">(${esc(x.code)}, +${x.weight})</span></li>`).join("")}</ul></div>`).join("") || '<div class="empty">Nothing matches.</div>');
+    } catch (e) { $("#a-list").innerHTML = err(e); }
+  };
+  ["a-st", "a-sv", "a-k"].forEach((id) => ($("#" + id).onchange = load));
+  app.onclick = async (e) => {
+    const t = e.target.closest("[data-ticket]"), d = e.target.closest("[data-dismiss]");
+    try {
+      if (t) { const r = await post(`/api/alerts/${t.dataset.ticket}/ticket`, { requested_by: S.actor }); toast(`Ticket #${r.id} opened, waiting for a ${r.next_gate}`); refreshCounts(); load(); }
+      if (d) { await post(`/api/alerts/${d.dataset.dismiss}/dismiss`, { actor: S.actor, note: "dismissed from the alert list" }); load(); }
+    } catch (x) { toast(x.message, true); }
+  };
+  load();
+};
+
+/* ---------------------------------------------------------------- risk */
+const RS = { approve_rate: 0.8 };
+PAGES.risk = async (app) => {
+  const r = await api(`/api/risk?approve_rate=${RS.approve_rate}`);
+  const m = r.metrics, fairBlock = (label, f) => {
+    if (!f || !f.groups) return `<p class="muted small">${esc((f && f.note) || "")}</p>`;
+    const cmp = f.comparisons ? Object.entries(f.comparisons)[0] : null;
+    return `<h3>By ${esc(label.replace("_", " "))}</h3><table><thead><tr><th>Group</th><th class="num">Customers</th><th class="num">Approved</th><th class="num">Observed bad rate</th><th class="num">Good customers approved</th></tr></thead><tbody>
+      ${Object.values(f.groups).map((g) => `<tr><td>${esc(g.group)}${g.group === f.reference_group ? ' <span class="badge">reference</span>' : ""}</td><td class="num">${g.n}</td><td class="num">${pct(g.approval_rate)}</td><td class="num">${pct(g.bad_rate)}</td><td class="num">${pct(g.true_positive_rate)}</td></tr>`).join("")}</tbody></table>
+      ${cmp ? `<p class="small">Disparate impact (${esc(cmp[0])} vs ${esc(f.reference_group)}): <b>${cmp[1].disparate_impact}</b> ${f.four_fifths_rule_flag ? '<span class="badge bad">below four-fifths</span>' : '<span class="badge good">above four-fifths</span>'} · equalised-odds gap ${cmp[1].equalised_odds_gap}</p>` : ""}`;
+  };
+  app.innerHTML = head("Customer risk", `A points scorecard from customer behaviour. Outcome: <b>${esc(r.outcome)}</b>.`)
+    + `<div class="note warn">${r.notes.map(esc).join(" ")}</div>
+    <div class="kpis" style="margin-top:16px"><div class="kpi"><div class="l">Gini, validation</div><div class="v">${m.validation.gini == null ? "-" : m.validation.gini.toFixed(3)}</div><div class="delta muted">train ${m.train.gini == null ? "-" : m.train.gini.toFixed(3)} · test ${m.test.gini == null ? "n/a" : m.test.gini.toFixed(3)} (${m.test.customers} customers, ${m.test.bad} bad)</div></div>
+      <div class="kpi"><div class="l">Bad rate</div><div class="v">${pct(r.base_bad_rate)}</div><div class="delta muted">${r.snapshot_bad} of ${r.snapshot_customers} customers</div></div>
+      <div class="kpi"><div class="l">Score cut-off</div><div class="v">${r.score_cutoff}</div><div class="delta muted">approves ${pct(r.approve_rate, 0)} of the training customers</div></div>
+      <div class="kpi"><div class="l">Scored now</div><div class="v">${r.live.customers}</div><div class="delta muted">${r.live.approved} approve · median ${r.live.median_score}</div></div></div>
+    <div class="grid cols-2">
+      <div class="card"><h2>What moves the score</h2><div class="scroll" style="max-height:none"><table><thead><tr><th>Feature</th><th class="num">Information value</th><th>Strength</th></tr></thead><tbody>${r.features.map((f) => `<tr><td>${esc(f.label)}</td><td class="num">${f.iv}</td><td><span class="badge">${esc(f.strength)}</span>${f.monotonic ? "" : ' <span class="badge warn">not monotonic</span>'}</td></tr>`).join("")}</tbody></table></div>
+        <details><summary>Points table (the card)</summary><div class="scroll"><table><thead><tr><th>Feature</th><th>Band</th><th class="num">Customers</th><th class="num">Bad rate</th><th class="num">Points</th></tr></thead><tbody>${r.points_table.filter((p) => p.n > 0).map((p) => `<tr><td>${esc(p.feature)}</td><td class="mono small">${esc(p.bin)}</td><td class="num">${p.n}</td><td class="num">${pct(p.bad_rate)}</td><td class="num"><b>${p.points}</b></td></tr>`).join("")}</tbody></table></div></details></div>
+      <div class="card"><h2>Fairness panel</h2>${fairBlock("country_group", r.fairness.country_group)}${fairBlock("tenure_band", r.fairness.tenure_band)}
+        <p class="small muted">Country is not a model feature; it is audited. Four-fifths is a screening threshold that calls for a closer look, not a verdict. Demographic parity and equalised odds cannot both hold when base rates differ.</p></div></div>
+    <div class="card" style="margin-top:16px"><div class="row"><h2 style="margin:0">Customers</h2>
+      <label class="f right" style="grid-auto-flow:column;align-items:center">Approve rate<select id="r-ar">${[0.7, 0.8, 0.9].map((v) => `<option value="${v}" ${v === RS.approve_rate ? "selected" : ""}>${v * 100}%</option>`).join("")}</select></label>
+      <select id="r-dec" style="width:auto"><option value="">all decisions</option><option>DECLINE</option><option>APPROVE</option></select></div>
+      <div id="r-tab" style="margin-top:10px"></div></div><div id="r-drawer"></div>`;
+  const loadTab = async () => {
+    const rows = await api(`/api/risk/customers?approve_rate=${RS.approve_rate}&order=score&limit=80&decision=${$("#r-dec").value}`);
+    $("#r-tab").innerHTML = `<div class="scroll"><table><thead><tr><th>Customer</th><th>Country</th><th class="num">Score</th><th class="num">Risk</th><th>Decision</th><th class="num">Spend</th><th>Main reason</th></tr></thead><tbody>${rows.map((c) => `<tr class="click" data-c="${esc(c.customer_id)}"><td>${esc(c.customer_id)}</td><td>${esc(c.country)}</td><td class="num"><b>${c.score}</b></td><td class="num">${pct(c.pd)}</td><td><span class="badge ${c.decision === "APPROVE" ? "good" : "bad"}">${c.decision}</span></td><td class="num">${gbp0(c.spend)}</td><td class="small">${esc(c.top_reason || "")}</td></tr>`).join("")}</tbody></table></div><p class="small muted">Lowest scores first. Click a customer for the points breakdown and to raise a credit-limit ticket.</p>`;
+  };
+  $("#r-dec").onchange = loadTab;
+  $("#r-ar").onchange = (e) => { RS.approve_rate = +e.target.value; route(); };
+  app.onclick = async (e) => {
+    const tr = e.target.closest("tr[data-c]"); if (!tr) return;
+    const c = await api(`/api/risk/customer/${tr.dataset.c}?approve_rate=${RS.approve_rate}`);
+    const best = Math.max(...c.points.map((p) => p.points), 1);
+    $("#r-drawer").innerHTML = `<div class="scrim" data-close></div><div class="drawer stack"><div class="row"><h2 style="margin:0">Customer ${esc(c.customer_id)}</h2><button class="btn ghost small right" data-close>Close</button></div>
+      <div class="row"><span class="badge ${c.decision === "APPROVE" ? "good" : "bad"}">${c.decision}</span><span class="badge">score ${c.score} (cut-off ${c.score_cutoff})</span><span class="badge">risk ${pct(c.pd)}</span><span class="muted small">${esc(c.country)} · ${c.split} split</span></div>
+      <div><h3>Points by feature</h3>${c.points.map((p) => `<div class="row small" style="flex-wrap:nowrap;margin:4px 0"><span style="width:150px">${esc(p.feature)}</span><div class="bar" style="flex:1"><i style="width:${(p.points / best) * 100}%"></i></div><span class="num" style="width:36px">${p.points}</span><span class="muted mono" style="width:120px;overflow:hidden;text-overflow:ellipsis">${esc(p.bin)}</span></div>`).join("")}</div>
+      <div><h3>Reason codes</h3>${c.reasons.length ? `<ol>${c.reasons.map((x) => `<li>${esc(x.text)}</li>`).join("")}</ol>` : '<p class="muted small">No feature lost points against its best band.</p>'}${c.warnings.length ? `<div class="note warn">${c.warnings.map(esc).join("<br>")}</div>` : ""}</div>
+      <div><h3>Current credit limit</h3><p>${c.credit_limit ? gbp0(c.credit_limit.limit_gbp) + ' <span class="muted small">set ' + esc(c.credit_limit.set_at) + "</span>" : '<span class="muted">none set</span>'}</p></div>
+      <div class="card flat"><h3>Change the credit limit</h3><div class="row"><label class="f">New limit (£)<input type="number" id="cl-new" min="0" step="50" value="${c.credit_limit ? c.credit_limit.limit_gbp : 1000}"></label><button class="btn" id="cl-go" style="align-self:end">Raise ticket</button></div><p class="small muted">Goes to the approval queue as ${esc(S.actor)}. An increase for a declined customer needs the owner too.</p></div></div>`;
+    $("#cl-go").onclick = async () => {
+      try { const t = await post("/api/tickets", { kind: "credit_limit_change", title: `Credit limit for customer ${c.customer_id}`, requested_by: S.actor, customer_id: c.customer_id, reason: `Scorecard ${c.score} (${c.decision}); ` + (c.reasons[0] ? c.reasons[0].text : "no weak features"), payload: { new_limit: +$("#cl-new").value } });
+        toast(`Ticket #${t.id} raised, needs: ${t.gates.join(" then ")}`); $("#r-drawer").innerHTML = ""; refreshCounts(); } catch (x) { toast(x.message, true); }
+    };
+  };
+  app.addEventListener("click", (e) => { if (e.target.closest("[data-close]")) $("#r-drawer").innerHTML = ""; });
+  loadTab();
+};
+
+/* ---------------------------------------------------------------- workflows */
+const WS = { status: "pending", open: null };
+PAGES.workflows = async (app) => {
+  const [list, ledger] = await Promise.all([api(`/api/tickets${WS.status ? "?status=" + WS.status : ""}`), api("/api/ledger")]);
+  const sm = list.summary.by_status;
+  const gateHtml = (t) => `<div class="gates">${t.gates.map((g, i) => `<span class="gate ${i < t.approvals_given ? "done" : ""}">${i < t.approvals_given ? "✓ " : ""}${g}</span>`).join('<span class="muted">›</span>')}</div>`;
+  app.innerHTML = head("Workflows", "Refunds, credit-limit changes and fraud reviews go through approval gates, and every step is written to a tamper-evident audit trail.", `<div class="right row"><span class="muted small">Acting as <b>${esc(S.actor)}</b> (${esc(roleOf(S.actor))})</span></div>`)
+    + `<div class="grid split wide"><div class="card"><div class="tabs">${["pending", "approved", "executed", "rejected", "cancelled", ""].map((s) => `<button data-st="${s}" class="${WS.status === s ? "on" : ""}">${s || "all"}${s && sm[s] != null ? " " + sm[s] : ""}</button>`).join("")}</div>
+      ${list.tickets.length ? list.tickets.map((t) => `<div class="alert" data-t="${t.id}" style="cursor:pointer"><div class="row"><b>#${t.id} ${esc(t.title)}</b><span class="badge ${{ pending: "warn", approved: "info", executed: "good", rejected: "bad", cancelled: "" }[t.status]}">${t.status}</span><span class="muted small right">${esc(t.kind.replace(/_/g, " "))}${t.amount != null ? " · " + gbp0(t.amount) : ""}</span></div>
+        <div class="row small" style="margin-top:6px">${gateHtml(t)}<span class="muted">raised by ${esc(t.requested_by)}</span></div></div>`).join("") : '<div class="empty">No tickets here.</div>'}</div>
+      <div class="stack"><div class="card"><h2>New ticket</h2><div class="stack">
+        <label class="f">Type<select id="n-kind"><option value="refund">Refund</option><option value="credit_limit_change">Credit limit change</option><option value="fraud_review">Fraud review</option></select></label>
+        <label class="f">Title<input type="text" id="n-title" placeholder="e.g. Refund for damaged goods"></label>
+        <div class="row"><label class="f" style="flex:1">Customer id<input type="text" id="n-cust"></label><label class="f" style="flex:1">Order id<input type="text" id="n-order"></label></div>
+        <label class="f" id="n-amt-l">Amount (£) or new limit<input type="number" id="n-amt" min="0" step="any"></label>
+        <label class="f">Reason<input type="text" id="n-reason"></label>
+        <button class="btn" id="n-go">Raise ticket</button></div></div>
+      <div class="card"><h2>Approval policy</h2><ul class="small" style="margin:0;padding-left:18px">${S.state.policy.map((p) => `<li>${esc(p)}</li>`).join("")}</ul></div></div></div>
+    <div class="grid cols-2" style="margin-top:16px"><div class="card"><div class="row"><h2 style="margin:0">Audit trail</h2><button class="btn ghost small right" id="verify">Verify chain</button></div><div id="aud" style="margin-top:10px"></div></div>
+      <div class="card"><h2>Executed actions</h2>${ledger.ledger.length || ledger.credit_limits.length ? `<table><tbody>${ledger.ledger.map((l) => `<tr><td>${esc(l.kind)}</td><td>${l.order_id ? "order " + esc(l.order_id) : ""} ${l.customer_id ? "· customer " + esc(l.customer_id) : ""}</td><td class="num">${l.amount != null ? gbp(l.amount) : ""}</td><td class="muted small">#${l.ticket_id}</td></tr>`).join("")}${ledger.credit_limits.map((l) => `<tr><td>credit limit</td><td>customer ${esc(l.customer_id)}</td><td class="num">${gbp0(l.limit_gbp)}</td><td class="muted small">#${l.ticket_id}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">Nothing executed yet.</div>'}
+      <p class="small muted">Executing writes to this app's own ledger; your business data is never changed.</p></div></div><div id="t-drawer"></div>`;
+  const kindUI = () => { const k = $("#n-kind").value; $("#n-amt-l").firstChild.textContent = k === "credit_limit_change" ? "New limit (£)" : k === "refund" ? "Refund amount (£)" : "Amount (£, optional)"; };
+  $("#n-kind").onchange = kindUI; kindUI();
+  $("#n-go").onclick = async () => {
+    const k = $("#n-kind").value, amt = $("#n-amt").value === "" ? null : +$("#n-amt").value;
+    try {
+      const t = await post("/api/tickets", { kind: k, title: $("#n-title").value || k.replace(/_/g, " "), requested_by: S.actor, customer_id: $("#n-cust").value || null, order_id: $("#n-order").value || null, amount: k === "credit_limit_change" ? null : amt, reason: $("#n-reason").value, payload: k === "credit_limit_change" ? { new_limit: amt } : {} });
+      toast(`Ticket #${t.id} raised, needs: ${t.gates.join(" then ")}`); WS.status = "pending"; refreshCounts(); route();
+    } catch (x) { toast(x.message, true); }
+  };
+  const loadAudit = async () => {
+    const a = await api("/api/audit?limit=12");
+    $("#aud").innerHTML = a.length ? a.map((x) => `<div class="small" style="padding:4px 0;border-bottom:1px solid var(--border)"><span class="muted">${esc(x.at)}</span> <b>${esc(x.actor)}</b> ${esc(x.action)}${x.ticket_id ? " #" + x.ticket_id : ""} <span class="mono muted" title="${esc(x.hash)}">${esc(x.hash.slice(0, 8))}</span></div>`).join("") : '<div class="empty">No entries yet.</div>';
+  };
+  $("#verify").onclick = async () => { const v = await api("/api/audit/verify"); toast(v.ok ? `Chain intact: ${v.entries} entries` : `Chain broken at entry ${v.first_bad_id}`, !v.ok); };
+  loadAudit();
+  const openTicket = async (id) => {
+    WS.open = id;
+    const t = await api(`/api/tickets/${id}`);
+    const mine = t.requested_by === S.actor, role = roleOf(S.actor);
+    $("#t-drawer").innerHTML = `<div class="scrim" data-close></div><div class="drawer stack"><div class="row"><h2 style="margin:0">#${t.id} ${esc(t.title)}</h2><button class="btn ghost small right" data-close>Close</button></div>
+      <div class="row"><span class="badge ${{ pending: "warn", approved: "info", executed: "good", rejected: "bad", cancelled: "" }[t.status]}">${t.status}</span><span class="badge">${esc(t.kind.replace(/_/g, " "))}</span>${t.amount != null ? `<span class="badge">${gbp(t.amount)}</span>` : ""}</div>
+      <p class="small">${t.customer_id ? "Customer " + esc(t.customer_id) + ". " : ""}${t.order_id ? "Order " + esc(t.order_id) + ". " : ""}Raised by ${esc(t.requested_by)}.</p>
+      ${t.reason ? `<div class="note small">${esc(t.reason)}</div>` : ""}
+      <div><h3>Gates</h3>${gateHtml(t)}${t.status === "pending" ? `<p class="small muted">Next approval: a ${esc(t.next_gate)} (not ${esc(t.requested_by)}).</p>` : ""}</div>
+      <div><h3>Decisions</h3>${t.approvals.map((a) => `<div class="small"><b>${esc(a.approver)}</b> (${a.role}) ${a.decision}d ${a.comment ? "- " + esc(a.comment) : ""} <span class="muted">${esc(a.at)}</span></div>`).join("") || '<span class="muted small">None yet.</span>'}</div>
+      <label class="f">Comment<input type="text" id="t-c"></label>
+      <div class="row">${t.status === "pending" ? '<button class="btn" data-do="approve">Approve</button><button class="btn danger" data-do="reject">Reject</button>' : ""}${t.status === "approved" ? '<button class="btn" data-do="execute">Execute</button>' : ""}${["pending", "approved"].includes(t.status) ? '<button class="btn ghost" data-do="cancel">Cancel ticket</button>' : ""}</div>
+      <p class="small muted">Acting as ${esc(S.actor)} (${esc(role)})${mine ? ", who raised this ticket" : ""}. The server enforces the rules; a refused action says why.</p>
+      <div><h3>Audit</h3>${t.audit.map((x) => `<div class="small"><span class="muted">${esc(x.at)}</span> <b>${esc(x.actor)}</b> ${esc(x.action)} <span class="mono muted">${esc(x.hash.slice(0, 8))}</span></div>`).join("")}</div></div>`;
+  };
+  app.onclick = async (e) => {
+    const st = e.target.closest("[data-st]"); if (st) { WS.status = st.dataset.st; return route(); }
+    if (e.target.closest("[data-close]")) { WS.open = null; $("#t-drawer").innerHTML = ""; return; }
+    const act = e.target.closest("[data-do]");
+    if (act) {
+      const id = $(".drawer h2").textContent.match(/#(\d+)/)[1];
+      try { await post(`/api/tickets/${id}/${act.dataset.do}`, { actor: S.actor, comment: $("#t-c").value }); toast("Done"); refreshCounts(); await route(); openTicket(id); }
+      catch (x) { toast(x.message, true); }
+      return;
+    }
+    const card = e.target.closest("[data-t]"); if (card) openTicket(card.dataset.t);
+  };
+  if (WS.open) openTicket(WS.open).catch(() => { WS.open = null; });
+};
+const roleOf = (n) => (S.state.users.find((u) => u.name === n) || {}).role || "";
+
+/* ---------------------------------------------------------------- boot */
+async function boot() {
+  S.state = await api("/api/state");
+  const l = S.state.llm;
+  $("#llmstat").textContent = l.configured ? `model: ${l.provider}` : "no model needed";
+  const sel = $("#actor");
+  let saved = null; try { saved = localStorage.getItem("aib-actor"); } catch (e) { /* private mode */ }
+  S.actor = S.state.users.some((u) => u.name === saved) ? saved : S.state.users[1].name;
+  sel.innerHTML = S.state.users.map((u) => `<option ${u.name === S.actor ? "selected" : ""} value="${esc(u.name)}">${esc(u.name)} (${u.role})</option>`).join("");
+  sel.onchange = () => { S.actor = sel.value; try { localStorage.setItem("aib-actor", S.actor); } catch (e) { /* ignore */ } if (S.route === "workflows") route(); };
+}
+$("#theme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("aib-theme", next); } catch (e) { /* ignore */ }
+};
+(async () => { await boot(); await refreshCounts(); route(); })();
