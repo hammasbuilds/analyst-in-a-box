@@ -4,6 +4,15 @@ const Charts = (() => {
   const COLORS = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
 
   let uid = 0;
+  /* Shorten a label to at most `max` characters, never mid-word when a word break is close, with an ellipsis. */
+  function clip(label, max) {
+    const s = String(label ?? "");
+    if (s.length <= max) return s;
+    const cut = s.slice(0, Math.max(1, max - 1));
+    const sp = cut.lastIndexOf(" ");
+    return (sp >= max * 0.5 ? cut.slice(0, sp) : cut).replace(/[\s,;:/-]+$/, "") + "…";
+  }
+  const dateLike = (v) => /^\d{4}-\d{2}/.test(String(v));
   const grad = (id, col, a0, a1, vertical = true) => `<linearGradient id="${id}" x1="0" y1="0" x2="${vertical ? 0 : 1}" y2="${vertical ? 1 : 0}"><stop offset="0" stop-color="${col}" stop-opacity="${a0}"/><stop offset="1" stop-color="${col}" stop-opacity="${a1}"/></linearGradient>`;
 
   function niceMax(v) {
@@ -20,8 +29,8 @@ const Charts = (() => {
   }
 
   /* series: [{name, values, dashed, color}], labels shared. split: index where the forecast starts (draws a divider). */
-  function line({ labels, series, fmt = compact, height = 230, split = null }) {
-    const W = 520, H = height, L = 44, R = 12, T = 12, B = 28;
+  function line({ labels, series, fmt = compact, height = 230, split = null, width = 520 }) {
+    const W = Math.max(320, Math.round(width)), H = height, L = 44, R = 12, T = 12, B = 28;
     const all = series.flatMap((s) => s.values.filter((v) => v != null));
     if (!all.length || labels.length < 2) return '<div class="empty">Not enough points to draw.</div>';
     const lo = Math.min(0, ...all), hi = niceMax(Math.max(...all));
@@ -32,9 +41,18 @@ const Charts = (() => {
       const v = lo + ((hi - lo) * k) / 4, yy = y(v);
       g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/><text x="${L - 6}" y="${yy + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
     }
-    const step = Math.ceil(labels.length / 7);
-    let xl = "";
-    labels.forEach((lb, i) => { if (i % step === 0 && (labels.length - 1 - i >= step * 0.6 || i === labels.length - 1)) xl += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${esc(String(lb).slice(0, 10))}</text>`; });
+    // x labels: as many as fit without touching; the first and last are anchored inward so the chart edge never cuts them
+    const txt = labels.map((lb) => String(lb).slice(0, 10));
+    const cw = Math.max(...txt.map((s) => s.length)) * 6.8 + 14;
+    const step = Math.max(1, Math.ceil(labels.length / Math.max(2, Math.floor((W - L - R) / cw))));
+    const anchor = (i) => (i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle");
+    const box = (i) => { const w = txt[i].length * 6.8, a = anchor(i); return a === "start" ? [x(i), x(i) + w] : a === "end" ? [x(i) - w, x(i)] : [x(i) - w / 2, x(i) + w / 2]; };
+    // first and last always; the steps between them only where they clear both neighbours
+    const last = labels.length - 1, kept = [0];
+    for (let i = step; i < last; i += step) if (box(i)[0] >= box(kept[kept.length - 1])[1] + 8 && box(i)[1] + 8 <= box(last)[0]) kept.push(i);
+    if (last > 0 && box(last)[0] >= box(kept[kept.length - 1])[1] + 8) kept.push(last);
+    else if (last > 0) kept[kept.length - 1] = last;
+    const xl = kept.map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="${anchor(i)}">${esc(txt[i])}</text>`).join("");
     let body = "";
     if (split != null && split > 0 && split < labels.length) {
       const xs = x(split - 0.5);
@@ -70,7 +88,7 @@ const Charts = (() => {
     rows.forEach((r, i) => {
       const yy = 4 + i * rowH, w = (Math.abs(r[1]) / max) * (W - labelW - R);
       const lb = String(r[0]);
-      s += `<text x="${labelW - 8}" y="${yy + 16}" text-anchor="end">${esc(lb.length > Math.floor(labelW / 7.4) ? lb.slice(0, Math.floor(labelW / 7.4) - 1) + "…" : lb)}<title>${esc(lb)}</title></text>`
+      s += `<text x="${labelW - 8}" y="${yy + 16}" text-anchor="end">${esc(clip(lb, Math.floor(labelW / 7.4)))}<title>${esc(lb)}</title></text>`
         + `<rect x="${labelW}" y="${yy + 3}" width="${Math.max(w, 1).toFixed(1)}" height="${rowH - 9}" rx="6" fill="url(#${id})" class="bx" style="--i:${i}"><title>${esc(lb)}: ${esc(fmt(r[1]))}</title></rect>`
         + `<text x="${labelW + w + 6}" y="${yy + 16}">${esc(fmt(r[1]))}</text>`;
     });
@@ -92,7 +110,9 @@ const Charts = (() => {
       const h = (r[1] / hi) * (H - T - B), xx = L + i * bw + bw * 0.12;
       const fade = highlightLast && i === rows.length - 1;
       b += `<rect x="${xx.toFixed(1)}" y="${(H - B - h).toFixed(1)}" width="${(bw * 0.76).toFixed(1)}" height="${Math.max(h, 0).toFixed(1)}" rx="5" fill="url(#${id})" class="bc" style="--i:${i}" ${fade ? 'opacity=".45"' : ""}><title>${esc(r[0])}: ${esc(fmt(r[1]))}${fade ? " (partial month)" : ""}</title></rect>`;
-      if (i % step === 0) b += `<text x="${(xx + bw * 0.38).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(String(r[0]).slice(2, 10))}</text>`;
+      // dates lose the century ("2011-03" -> "11-03"); anything else is shortened to the space it has
+      const lb = dateLike(r[0]) ? String(r[0]).slice(2, 10) : clip(r[0], Math.max(3, Math.floor((bw * step) / 7)));
+      if (i % step === 0) b += `<text x="${(xx + bw * 0.38).toFixed(1)}" y="${H - 10}" text-anchor="middle">${esc(lb)}<title>${esc(r[0])}</title></text>`;
     });
     return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img"><defs>${grad(id, color, 1, 0.35)}</defs><g class="grid">${g}</g>${b}</svg>`;
   }
@@ -116,5 +136,5 @@ const Charts = (() => {
     return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="trend over the last ${v.length} weeks"><defs>${grad(id, "currentColor", 0.42, 0)}</defs><path class="ar" fill="url(#${id})" d="${d}L${x(last).toFixed(1)},${H}L${x(0).toFixed(1)},${H}Z"/><path class="ln" d="${d}"/><path class="dot" d="M${x(last).toFixed(1)},${y(v[last]).toFixed(1)}h.01"/></svg>`;
   }
 
-  return { line, bars, columns, share, spark, esc, compact };
+  return { line, bars, columns, share, spark, esc, compact, clip };
 })();

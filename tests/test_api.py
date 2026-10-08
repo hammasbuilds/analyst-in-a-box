@@ -229,3 +229,10 @@ def test_paste_csv_errors_are_clear(client):
 
 def test_paste_requires_sign_in(plain_client):
     assert plain_client.post("/api/upload-text", json={"name": "x", "text": "a\n1\n"}).status_code == 401
+
+
+def test_connect_with_an_empty_location_says_what_to_enter(client):
+    """It used to answer 'file not found: ' with nothing after the colon."""
+    r = client.post("/api/sources", json={"kind": "sqlite", "location": "   ", "name": None})
+    assert r.status_code == 400
+    assert "path of a SQLite file" in r.json()["detail"]

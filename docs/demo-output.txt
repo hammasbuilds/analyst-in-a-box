@@ -12,9 +12,9 @@ Ask your data (no model)
 Forecast (8 weeks, mint_wls, 104 weeks of history)
   coherent before reconciling: False; after: True
   series beating seasonal naive in the backtest: 38 of 59 (4 origins)
-  total     MAE seasonal naive  15,462.4 | base  10,978.5 | bottom-up  11,172.0 | mint_wls  11,141.5
-  category  MAE seasonal naive   1,633.2 | base   1,164.9 | bottom-up   1,120.4 | mint_wls   1,134.0
-  product   MAE seasonal naive     477.6 | base     354.9 | bottom-up     354.9 | mint_wls     358.9
+  total     MAE seasonal naive  15,462.4 | base  10,978.5 | bottom-up  11,497.2 | mint_wls  11,250.0
+  category  MAE seasonal naive   1,633.2 | base   1,164.9 | bottom-up   1,129.8 | mint_wls   1,135.3
+  product   MAE seasonal naive     477.6 | base     342.6 | bottom-up     342.6 | mint_wls     349.9
 
 Fraud and anomalies: 15,860 orders screened -> 255 alerts {'high': 24, 'medium': 81, 'low': 150} {'order': 171, 'refund': 66, 'day': 18}
   top: Refund C502262 score 66.1: Refund of £10,953.50 is 5.7 robust deviations above the typical £16.95 refund.

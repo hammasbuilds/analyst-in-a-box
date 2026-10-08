@@ -82,6 +82,8 @@ def _check_sqlite(path: str) -> None:
 
 def add_source(con: sqlite3.Connection, kind: str, location: str, name: str | None) -> dict[str, Any]:
     location = (location or "").strip()
+    if not location:
+        raise SourceError("enter the path of a SQLite file, or a postgresql:// URL")
     if kind == "sqlite":
         _check_sqlite(location)
         mine = {config.app_db_path().resolve(), config.uploads_db_path().resolve()}

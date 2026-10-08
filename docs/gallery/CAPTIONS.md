@@ -1,6 +1,6 @@
 # Gallery captions
 
-Every shot is made by `scripts/gallery.py` from the real UI (dark mode, 1440x900 unless noted). Where the page clears a form on success, the shot stacks the form before (top) over the result (bottom).
+Every shot is made by `scripts/gallery.py` from the real UI (headless Edge, dark mode, 1440x900 unless noted). Where the page clears a form on success, the shot stacks the form before (top) over the result (bottom).
 
 
 ## Home
@@ -9,8 +9,8 @@ Every shot is made by `scripts/gallery.py` from the real UI (dark mode, 1440x900
 - `02-tryit-1.png`: Try-it, example 1: input `top 5 products by revenue last quarter`. Output: SQL, a 5-row table and bar chart; "last quarter" is the newest quarter in the data.
 - `03-tryit-2.png`: Try-it, example 2: input `monthly revenue in 2011`. Output: a 12-month table and a line chart from SQL with a 2011 filter.
 - `04-tryit-3.png`: Try-it, example 3: input `is mahine sab se zyada bikne wali cheez` (Roman Urdu). Output: understood as "this month, top products"; 10 rows and a bar chart.
-- `05-tryit-4.png`: Try-it, example 4: input `revenue by country`. Output: 32 countries ranked by net revenue, with the SQL.
-- `06-home-phone.png`: Home at phone width (390 px): the same Try-it page reflowed, navigation along the top.
+- `05-tryit-4.png`: Try-it, example 4: input `revenue by country`. Output: 32 countries ranked by net revenue; the chart is horizontal bars with whole country names, the 12 largest drawn and "20 more in the table", with the SQL.
+- `06-home-phone.png`: Home at phone width (390 px): content first. Sign-in sits behind one Sign in button, and the eight pages are a labelled 4 x 2 tab grid.
 
 ## Data
 
@@ -22,11 +22,12 @@ Every shot is made by `scripts/gallery.py` from the real UI (dark mode, 1440x900
 
 - `10-ask-english.png`: Ask in English: `Top 10 products by revenue in 2011`. Output: bar chart, table, and the editable SQL that ran; marked as built-in parser, read-only checked.
 - `11-ask-roman-urdu.png`: Ask in Roman Urdu: `har mahine ki bikri` (sales every month). Output: the badge "Roman Urdu understood", a 25-month line chart and table.
-- `12-ask-refused-write.png`: A write attempt: after a one-row question, the SQL box is edited to `DELETE FROM orders` and run. Output: refused, "only SELECT is permitted, got Delete"; the data is untouched.
+- `12-ask-refused-write.png`: A write attempt: after a one-row question, the SQL box is edited to `DELETE FROM orders` and run. Output: refused, "only SELECT is permitted, got Delete", marked "not run"; the earlier result is cleared, not left under the refusal, and the SQL stays editable.
 
 ## Forecasts
 
-- `13-forecast.png`: Forecasts: horizon set to 13 weeks and Run forecast pressed. Output: totals add up (yes), 39 of 60 series beat seasonal naive in the backtest, chart with forecast band, error by level, and every series.
+- `13-forecast.png`: Forecasts: horizon set to 13 weeks and Run forecast pressed. Output: totals add up (yes), 39 of 60 series beat seasonal naive in the backtest, a note that no 52-week season is fitted on two years of weeks, the total charted against the same weeks last year (691,373 forecast against 281,795 a year earlier), the backtest table by level in full, and every series with last year, its own forecast and the reconciled one.
+- `13b-forecast-series.png`: Every series, close up: product 37410 sold two bulk orders (6,012 and 19,164 units) in early 2010 and nothing since. Its own forecast (TSB) is 1 unit over 13 weeks; MinT reconciliation adds 346, flagged "+346 reconciled". 22151 (own forecast 794, reconciled 469) is the same effect in the other direction.
 
 ## Fraud & anomalies
 

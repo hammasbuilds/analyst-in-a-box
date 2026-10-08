@@ -12,9 +12,43 @@ def test_classify_patterns():
     assert forecasting.classify([0, 0, 0, 0, 1])["pattern"] == "too sparse"
 
 
-def test_intermittent_series_gets_croston():
+def test_intermittent_series_gets_tsb():
     name, vals = forecasting.fit_forecast([0, 0, 4, 0, 0, 0, 5, 0, 0, 4, 0, 0] * 3, 4)
-    assert name == "Croston" and len(vals) == 4 and all(v > 0 for v in vals)
+    assert name == "TSB" and len(vals) == 4 and all(v > 0 for v in vals)
+
+
+def test_dormant_product_is_not_forecast_to_keep_selling():
+    """The sample's product 37410: two bulk orders (6,012 and 19,164 units) early in 2010, then
+    nothing for 88 weeks. Croston only updates when something sells, so it kept forecasting about
+    385 units a week; TSB decays the chance of a sale every empty week."""
+    hist = [12, 0, 0, 0, 0, 0, 6012, 0, 0, 0, 19164, 12, 0, 0, 0, 6] + [0] * 88
+    name, vals = forecasting.fit_forecast(hist, 13)
+    assert name == "TSB"
+    assert sum(vals) < 13  # under one unit a week, against ~5,000 over 13 weeks from Croston
+    # and a product still selling in bursts keeps a real rate
+    live = [0, 0, 30, 0, 0, 0, 25, 0, 0, 40, 0, 0] * 8
+    assert 5 < forecasting.tsb(live, 1)[0] < 15
+
+
+def test_season_is_used_only_when_the_backtest_can_score_it():
+    """A 52-week Holt-Winters fitted on exactly two years was never backtested and went negative on
+    28 of 43 sample series (product 22151 was forecast 0 while selling ~60 a week)."""
+    two_years = [50.0 + (i % 52) for i in range(104)]
+    assert forecasting.fit_forecast(two_years, 4)[0] == "ETS"
+    assert forecasting.fit_forecast(two_years, 4, seasonal=True)[0] == "ETS (seasonal)"
+    assert forecasting.fit_forecast(two_years[:80], 4, seasonal=True)[0] == "ETS"
+
+
+def test_forecast_shows_last_year_and_own_forecast_and_says_why_no_season(src):
+    r = forecasting.run(src, horizon=4, per_category=2, method="mint_wls")
+    first_origin = max(forecasting.PERIOD + 8, r["history_weeks"] - 4 - 3 * 4)
+    assert r["seasonal"] == (first_origin >= 2 * forecasting.PERIOD)
+    if not r["seasonal"]:
+        assert "No 52-week season" in r["seasonal_note"]
+        assert all(not n["model"].endswith("(seasonal)") for n in r["nodes"])
+    for n in r["nodes"]:
+        assert len(n["base_forecast"]) == 4
+        assert n["last_year"] is None or len(n["last_year"]) == 4
 
 
 def test_forecast_is_coherent_nonnegative_and_backtested(src):

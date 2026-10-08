@@ -1,13 +1,17 @@
 """Hierarchical demand forecast: total -> category -> product, coherent, with a backtest.
 
 Built on demand-forecast-platform (path dependency, not edited): Hierarchy and its reconciliation
-methods, ETS, Croston, seasonal naive and the error measures. What is added here:
+methods, ETS, seasonal naive and the error measures. What is added here:
 
   * the data: weekly units per product from completed orders, trailing/leading partial weeks cut
   * the hierarchy: the top products of every category are leaves, the rest of the category is one
     "other" leaf, so the total is the real total
   * per-series model choice by demand pattern (Syntetos-Boylan: ADI and CV^2), made again inside
     every backtest fold, so the backtest sees only what the model would have seen
+  * TSB (Croston with a decaying demand probability) for intermittent and lumpy demand, so a
+    product that stopped selling stops being forecast
+  * a seasonal model only when the backtest can score it too, so the forecast is always made by
+    the model the backtest judged
   * a rolling-origin backtest against seasonal naive for every node and every reconciliation method
   * non-negative leaves, then re-aggregation, so the result is both >= 0 and exactly coherent
 """
@@ -22,7 +26,6 @@ from typing import Any
 
 from forecast import (
     Hierarchy,
-    croston,
     ets,
     naive,
     naive_seasonal,
@@ -59,9 +62,32 @@ def classify(series: list[float]) -> dict[str, Any]:
     return {"pattern": pattern, "adi": round(adi, 2), "cv2": round(cv2, 2)}
 
 
-def fit_forecast(history: list[float], horizon: int) -> tuple[str, list[float]]:
-    """The model for one series, chosen from that series' own demand pattern: Croston for
-    intermittent and lumpy demand, ETS (seasonal when two years of weeks exist) otherwise.
+def tsb(history: list[float], horizon: int, *, alpha: float = 0.1, beta: float = 0.1) -> list[float]:
+    """Teunter-Syntetos-Babai: Croston's size smoothing, but the chance of a sale is updated every
+    week, sale or not. Plain Croston only updates when something sells, so a product that sold two
+    bulk orders and then nothing for 88 weeks kept a forecast of 385 units a week; here the
+    probability decays by (1 - beta) every empty week and the forecast goes to zero."""
+    nz = [i for i, v in enumerate(history) if v > 0]
+    if not nz:
+        return [0.0] * horizon
+    size = float(history[nz[0]])
+    prob = len(nz) / (len(history) - nz[0])
+    for v in history[nz[0] + 1 :]:
+        if v > 0:
+            size += alpha * (v - size)
+            prob += beta * (1.0 - prob)
+        else:
+            prob -= beta * prob
+    return [prob * size] * horizon
+
+
+def fit_forecast(history: list[float], horizon: int, *, seasonal: bool = False) -> tuple[str, list[float]]:
+    """The model for one series, chosen from that series' own demand pattern: TSB for
+    intermittent and lumpy demand, ETS otherwise, with a 52-week season only when `seasonal`.
+
+    `seasonal` is decided once per run by `run`: only when every backtest fold has two full years
+    before its origin, so the season the forecast uses is one the backtest scored. On exactly two
+    years (the sample) a Holt-Winters fit is never tested and went negative on 28 of 43 series.
 
     A holdout-based "pick the best of several" was tried and made the backtest worse (a noisy
     8-week holdout picks noise), so the choice is by pattern only and the backtest is what says
@@ -69,18 +95,18 @@ def fit_forecast(history: list[float], horizon: int) -> tuple[str, list[float]]:
     """
     pattern = classify(history)["pattern"]
     if pattern in ("intermittent", "lumpy", "too sparse"):
-        return "Croston", croston(history, horizon)
-    seasonal = len(history) >= 2 * PERIOD
+        return "TSB", tsb(history, horizon)
+    seasonal = seasonal and len(history) >= 2 * PERIOD
     return ("ETS (seasonal)" if seasonal else "ETS",
             ets(history, horizon, period=PERIOD if seasonal else 1))
 
 
-def forecaster(history: list[float], horizon: int) -> list[float]:
-    return fit_forecast(history, horizon)[1]
+def forecaster(history: list[float], horizon: int, *, seasonal: bool = False) -> list[float]:
+    return fit_forecast(history, horizon, seasonal=seasonal)[1]
 
 
-def model_name(history: list[float]) -> str:
-    return fit_forecast(history, 1)[0]
+def model_name(history: list[float], *, seasonal: bool = False) -> str:
+    return fit_forecast(history, 1, seasonal=seasonal)[0]
 
 
 def _monday(d: date) -> date:
@@ -150,8 +176,10 @@ def _nonneg(h: Hierarchy, fc: dict[str, list[float]]) -> dict[str, list[float]]:
     return h.aggregate(leaves)
 
 
-def _base(h: Hierarchy, train: dict[str, list[float]], horizon: int) -> dict[str, list[float]]:
-    return {n: [max(0.0, v) for v in forecaster(train[n], horizon)] for n in h.nodes}
+def _base(h: Hierarchy, train: dict[str, list[float]], horizon: int,
+          seasonal: bool = False) -> dict[str, list[float]]:
+    return {n: [max(0.0, v) for v in forecaster(train[n], horizon, seasonal=seasonal)]
+            for n in h.nodes}
 
 
 def _bench(train: list[float], horizon: int) -> list[float]:
@@ -183,19 +211,20 @@ def run(
     weeks: list[str] = data["weeks"]
     n = len(weeks)
 
+    # --- backtest folds, decided first: the season is used only if every fold can fit it ----
+    initial = max(PERIOD + 8, n - horizon - (folds - 1) * 4)
+    origins = [o for o in range(initial, n - horizon + 1, 4)][:folds]
+    if not origins:
+        raise ForecastError("not enough history for a backtest")
+    seasonal = origins[0] >= 2 * PERIOD
+
     # --- final forecast ------------------------------------------------------------------
-    base = _base(h, hist, horizon)
+    base = _base(h, hist, horizon, seasonal)
     rec = reconcile(h, base, method, history=hist)
     fc = _nonneg(h, rec)
     coherent = h.is_coherent(fc)
     last = date.fromisoformat(weeks[-1])
     future = [(last + timedelta(days=7 * (i + 1))).isoformat() for i in range(horizon)]
-
-    # --- backtest: same folds for every node and method -----------------------------------
-    initial = max(PERIOD + 8, n - horizon - (folds - 1) * 4)
-    origins = [o for o in range(initial, n - horizon + 1, 4)][:folds]
-    if not origins:
-        raise ForecastError("not enough history for a backtest")
     names = ("base", *METHODS)
     err = {m: dict.fromkeys(h.nodes, 0.0) for m in names}
     bench_err = dict.fromkeys(h.nodes, 0.0)
@@ -203,7 +232,7 @@ def run(
     naive_err = dict.fromkeys(h.nodes, 0.0)
     for o in origins:
         train = {k: v[:o] for k, v in hist.items()}
-        b = _base(h, train, horizon)
+        b = _base(h, train, horizon, seasonal)
         fcs = {"base": b}
         for m in METHODS:
             fcs[m] = _nonneg(h, reconcile(h, b, m, history=train))
@@ -240,10 +269,11 @@ def run(
         depth = next(i for i, lv in enumerate(levels) if name in lv)
         out_nodes.append({
             "name": name, "parent": node.parent, "level": level_names[depth] if depth < 3 else str(depth),
-            "model": model_name(series), "pattern": c["pattern"], "adi": c["adi"], "cv2": c["cv2"],
+            "model": model_name(series, seasonal=seasonal), "pattern": c["pattern"], "adi": c["adi"], "cv2": c["cv2"],
             "history": [round(v, 1) for v in series[-26:]],
             "forecast": [round(v, 1) for v in fc[name]],
             "base_forecast": [round(v, 1) for v in base[name]],
+            "last_year": [round(v, 1) for v in _bench(series, horizon)] if n >= PERIOD else None,
             "backtest": {
                 "mae": round(model_mae, 3), "seasonal_naive_mae": round(bench_mae, 3),
                 "relative_mae": rel, "beats_seasonal_naive": (rel < 1.0) if rel is not None else None,
@@ -257,6 +287,12 @@ def run(
         "method": method, "horizon": horizon, "per_category": per_category,
         "weeks": weeks[-26:], "future_weeks": future, "history_weeks": n,
         "coherent": coherent, "coherent_before_reconciliation": h.is_coherent(base),
+        "seasonal": seasonal,
+        "seasonal_note": None if seasonal else (
+            f"No 52-week season is fitted: {n} weeks of history leaves under two years before the "
+            "first backtest origin, so a seasonal model could not be backtested. Forecasts carry "
+            "the recent level forward and do not know about a seasonal drop or peak; compare with "
+            "the same weeks last year."),
         "backtest": {
             "origins": [weeks[o] for o in origins], "folds": k, "horizon": horizon,
             "by_level": by_level,

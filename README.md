@@ -18,7 +18,7 @@ Connect a database or drop in a spreadsheet and you can ask it questions in Engl
 
 ## Gallery
 
-Every picture is a real screenshot of the running app, taken by `scripts/gallery.py` (headless Chromium, dark mode, sample data, a temporary data folder); the same text is in [docs/gallery/CAPTIONS.md](docs/gallery/CAPTIONS.md).
+Every picture is a real screenshot of the running app, taken by `scripts/gallery.py` (headless Edge, dark mode, sample data, a temporary data folder); the same text is in [docs/gallery/CAPTIONS.md](docs/gallery/CAPTIONS.md).
 
 ### Home
 
@@ -40,11 +40,11 @@ Try-it, example 3: input `is mahine sab se zyada bikne wali cheez` (Roman Urdu).
 
 ![05-tryit-4](docs/gallery/05-tryit-4.png)
 
-Try-it, example 4: input `revenue by country`. Output: 32 countries ranked by net revenue, with the SQL.
+Try-it, example 4: input `revenue by country`. Output: 32 countries ranked by net revenue; the chart is horizontal bars with whole country names, the 12 largest drawn and "20 more in the table", with the SQL.
 
 ![06-home-phone](docs/gallery/06-home-phone.png)
 
-Home at phone width (390 px): the same Try-it page reflowed, navigation along the top.
+Home at phone width (390 px): content first. Sign-in sits behind one Sign in button, and the eight pages are a labelled 4 x 2 tab grid.
 
 
 ### Data
@@ -74,14 +74,18 @@ Ask in Roman Urdu: `har mahine ki bikri` (sales every month). Output: the badge 
 
 ![12-ask-refused-write](docs/gallery/12-ask-refused-write.png)
 
-A write attempt: after a one-row question, the SQL box is edited to `DELETE FROM orders` and run. Output: refused, "only SELECT is permitted, got Delete"; the data is untouched.
+A write attempt: after a one-row question, the SQL box is edited to `DELETE FROM orders` and run. Output: refused, "only SELECT is permitted, got Delete", marked "not run"; the earlier result is cleared, not left under the refusal, and the SQL stays editable.
 
 
 ### Forecasts
 
 ![13-forecast](docs/gallery/13-forecast.png)
 
-Forecasts: horizon set to 13 weeks and Run forecast pressed. Output: totals add up (yes), 39 of 60 series beat seasonal naive in the backtest, chart with forecast band, error by level, and every series.
+Forecasts: horizon set to 13 weeks and Run forecast pressed. Output: totals add up (yes), 39 of 60 series beat seasonal naive in the backtest, a note that no 52-week season is fitted on two years of weeks, the total charted against the same weeks last year (691,373 forecast against 281,795 a year earlier), the backtest table by level in full, and every series with last year, its own forecast and the reconciled one.
+
+![13b-forecast-series](docs/gallery/13b-forecast-series.png)
+
+Every series, close up: product 37410 sold two bulk orders (6,012 and 19,164 units) in early 2010 and nothing since. Its own forecast (TSB) is 1 unit over 13 weeks; MinT reconciliation adds 346, flagged "+346 reconciled". 22151 (own forecast 794, reconciled 469) is the same effect in the other direction.
 
 
 ### Fraud & anomalies
@@ -190,7 +194,7 @@ The home page runs a real question through the app's own `/api/ask` when it load
 |---|---|
 | **Data** | A shipped real sample (below), SQLite files, PostgreSQL URLs (optional driver), and CSV / TSV / Excel uploads (one table per sheet, types inferred). Schema browser with sample rows. An uploaded sheet of order lines can be mapped onto the business tables so every module works on it. |
 | **Ask your data** | English and Roman Urdu. The SQL is always shown and editable. Read-only by construction (see below). A deterministic parser answers without a model; an LLM writes SQL when configured, and the parser answers if it fails. Result table plus a suggested chart. |
-| **Forecasts** | Weekly units per product and category, hierarchical (total, category, product), reconciled so the numbers add up, Croston for intermittent demand, a rolling-origin backtest against seasonal naive for every series and method. |
+| **Forecasts** | Weekly units per product and category, hierarchical (total, category, product), reconciled so the numbers add up, TSB for intermittent demand, a rolling-origin backtest against seasonal naive for every series and method; each series shows its own forecast, the reconciled one and the same weeks last year. |
 | **Fraud and anomalies** | Robust z-score (median and MAD) and rule checks on orders and refunds, plus daily revenue and order-count spikes. Every alert lists its reasons with the numbers behind them. Open a review ticket or dismiss. |
 | **Customer risk** | WoE/IV scorecard with points and reason codes per customer, Gini and Brier on train, validation and test, calibration, a fairness audit by country and tenure. Raise a credit-limit ticket from a customer. |
 | **Workflows** | Tickets for refunds, credit-limit changes and fraud reviews. PIN sign-in, approval gates by amount, four-eyes, roles, a state machine, and a SHA-256 hash-chained audit trail with a signed head and a cross-check against the live tables. |
@@ -220,11 +224,12 @@ PostgreSQL needs the optional driver: `uv sync --extra postgres`.
 Checks:
 
 ```
-uv run pytest -q                      # 152 tests
+uv run pytest -q                      # 169 tests
 uv run ruff check .
 uv run python demo.py                 # offline end-to-end demo (output below)
 uv run --with playwright python scripts/ui_tour.py http://127.0.0.1:8791 docs/screenshots PINS_FILE   # drives the real UI
 uv run --with playwright --with pillow python scripts/gallery.py   # recreates docs/gallery (starts its own server)
+uv run --with playwright python scripts/ui_audit.py              # every control on every page, 3 layouts; exits non-zero on any problem
 ```
 
 ## Input / Output
@@ -245,7 +250,7 @@ Ask your data (no model)
 Forecast (8 weeks, mint_wls, 104 weeks of history)
   coherent before reconciling: False; after: True
   series beating seasonal naive in the backtest: 38 of 59 (4 origins)
-  total     MAE seasonal naive  15,462.4 | base  10,978.5 | bottom-up  11,172.0 | mint_wls  11,141.5
+  total     MAE seasonal naive  15,462.4 | base  10,978.5 | bottom-up  11,497.2 | mint_wls  11,250.0
 
 Fraud and anomalies: 15,860 orders screened -> 255 alerts {'high': 24, 'medium': 81, 'low': 150}
 
@@ -289,7 +294,7 @@ Pure CSS and one small vanilla JS file (`static/motion.js`), no build step. Butt
 flowchart LR
     S["sample / SQLite / PostgreSQL / CSV / Excel"] --> C["business tables<br/>customers, products, orders,<br/>order_items, payments"]
     Q["question: en / roman-ur"] --> P["parser or LLM"] --> V["sqlglot validate<br/>one SELECT only"] --> R["read-only connection<br/>authoriser + deadline"] --> C
-    C --> F["forecast<br/>ETS / Croston, reconcile, backtest"]
+    C --> F["forecast<br/>ETS / TSB, reconcile, backtest"]
     C --> X["fraud rules<br/>median / MAD"]
     C --> K["scorecard<br/>WoE, points, fairness"]
     X --> T["tickets<br/>gates, four eyes"]
@@ -313,7 +318,7 @@ Layers 2 and 3 are independent; the tests break each alone, with 36 hostile stat
 | Repo | How | What for |
 |---|---|---|
 | `sql-analyst-agent` | validator adapted into `sqlsafe.py` (MIT licence, commit `6ab8f80` noted in the header) | parse-tree SQL validation; extended to SQLite, with a read-only connection layer added |
-| `demand-forecast-platform` | path dependency, unmodified | `Hierarchy`, reconciliation (bottom-up, top-down, MinT, blend), ETS, Croston, seasonal naive, MAE, sMAPE |
+| `demand-forecast-platform` | path dependency, unmodified | `Hierarchy`, reconciliation (bottom-up, top-down, MinT, blend), ETS, seasonal naive, MAE, sMAPE (TSB is in `forecasting.py`) |
 | `credit-risk-engine` | path dependency, unmodified | WoE/IV binning, logistic fit, points scale, reason codes, calibration, Gini, Brier, fairness audit |
 | `incident-copilot` | ideas only | robust z-score with MAD, one-sentence reason per alert |
 | `fraudtrail` (private) | ideas only; no code or data copied | which rule families a transaction screen needs |
@@ -324,7 +329,7 @@ The sibling repos belong to other sessions and were only read.
 
 ### Forecasts
 
-Weekly units from completed orders, the first and last partial weeks cut (104 full weeks). The hierarchy is total, 12 categories and, in each, the top products by volume plus one "other" leaf for the rest, so every level is a real total. Each series gets a model from its own demand pattern (Syntetos-Boylan ADI and CV²): Croston for intermittent and lumpy demand, ETS otherwise, seasonal once two years of weeks exist. Reconciliation (default MinT weighted) makes the levels add up; negative values are set to zero on the leaves and re-added, so the result is both non-negative and exactly coherent. The backtest uses 4 rolling origins, 8 weeks each, and models see only the history before each origin. The page shows MAE by level for seasonal naive, the unreconciled forecasts and each method, and flags every series where seasonal naive won.
+Weekly units from completed orders, the first and last partial weeks cut (104 full weeks). The hierarchy is total, 12 categories and, in each, the top products by volume plus one "other" leaf for the rest, so every level is a real total. Each series gets a model from its own demand pattern (Syntetos-Boylan ADI and CV²): TSB (Teunter-Syntetos-Babai) for intermittent and lumpy demand, ETS otherwise. TSB replaced Croston because Croston only updates when something sells: product 37410 sold two bulk orders (6,012 and 19,164 units) in early 2010 and nothing for the next 88 weeks, and Croston still forecast 385 units a week; TSB decays the chance of a sale every empty week and forecasts about zero. A 52-week season is fitted only when every backtest fold has two full years before its origin, so the forecast is made by the model the backtest scored; with the sample's 104 weeks that is never, and the page says the forecast carries the recent level forward and shows the same weeks last year next to it (the previous build fitted an untested Holt-Winters on exactly two years, which went negative on 28 of 43 series, product 22151 among them). Reconciliation (default MinT weighted) makes the levels add up; negative values are set to zero on the leaves and re-added, so the result is both non-negative and exactly coherent. MinT spreads a category's disagreement over its products in roughly equal units, so a small or dormant product can be moved by hundreds of units; the page shows each series' own forecast next to the reconciled one and flags large moves. The backtest uses 4 rolling origins, 8 weeks each, and models see only the history before each origin. The page shows MAE by level for seasonal naive, the unreconciled forecasts and each method, and flags every series where seasonal naive won.
 
 ### Fraud and anomalies
 
@@ -348,9 +353,9 @@ Every number is printed by the code in this repository.
 
 | Check | Result |
 |---|---|
-| Tests | 157 passing, ruff clean. API tests hit every endpoint; `test_security.py` (82 tests) holds every attack found in the review as a regression test; workflow tests cover gates, roles, four-eyes, illegal transitions and over-refund. |
+| Tests | 169 passing, ruff clean. API tests hit every endpoint; `test_security.py` (82 tests) holds every attack found in the review as a regression test; workflow tests cover gates, roles, four-eyes, illegal transitions and over-refund. |
 | Hermetic | Tests build a 700-customer slice of the sample in a temp directory and never touch `~/.analyst-in-a-box`. |
-| Forecast | Totals disagree before reconciling and add up after; 38 of 59 series beat seasonal naive on the backtest. At the total, MinT-weighted MAE is 11,141 units a week against 15,462 for seasonal naive. |
+| Forecast | Totals disagree before reconciling and add up after; 38 of 59 series beat seasonal naive on the backtest (8 weeks). At the total, MinT-weighted MAE is 11,250 units a week against 15,462 for seasonal naive. Moving from Croston to TSB lowered product-level MAE from 354.9 to 342.6 and raised MinT-weighted total MAE from 11,141 to 11,250, because the category gaps MinT spreads changed. |
 | Fraud | 255 alerts on 15,860 orders (24 high, 81 medium, 150 low). A planted £250,000 manual-line order in a copy of the data is flagged high (test). |
 | Risk | Gini 0.435 train, 0.415 validation, -0.194 test. |
 | UI tour | Every page, a refused write, a Roman Urdu question, a ticket raised from an alert and approved: no unexpected console error. |
@@ -360,7 +365,7 @@ Every number is printed by the code in this repository.
 - **No fraud verdicts.** No labels exist, so alerts are unmeasured prompts. Large wholesale orders are normal in this data, so many flags are real customers buying a lot.
 - **The risk model is a refund-behaviour proxy**, not credit-loss prediction, and it is weak: the held-out test split is 51 customers with 2 bad outcomes, so its Gini (-0.194) says nothing either way. Read the validation Gini (0.415, 128 customers) as modest. Several features are not monotonic, and the UI says so.
 - **The fairness panel audits two groupings** (country group and tenure band). It is a screen, not proof of fairness, and a small "Other" country group makes its rates noisy.
-- **Forecasts cover units, not revenue**, and only products that sold at least once; the next 8 weeks cross the Christmas gap, which with two years of history is one repeat. The total can beat seasonal naive while individual categories do not.
+- **Forecasts cover units, not revenue**, and only products that sold at least once. **They have no season on the sample**: two years of weeks is too short to fit and backtest a 52-week season, so the forecast after the November peak runs well above the same weeks last year (the page shows both). The backtest origins fall in summer 2011, so it says nothing about the Christmas drop. The total can beat seasonal naive while individual categories do not.
 - **The built-in parser is not a language model.** It composes revenue, orders, customers, units, refunds, averages, rankings, time breakdowns, country, category and date filters; "compare 2010 with 2011" or free-form joins need a model. When it cannot map a question it says so rather than guess. Roman Urdu is a glossary of about 60 business words.
 - **PostgreSQL** supports Ask and the schema browser only; the dashboard, forecasts, fraud and risk need the SQLite business tables. It was not tested against a live server in this build.
 - **Sign-in is PINs for a fixed list of four people on one machine**, not single sign-on: users cannot be added from the UI, PINs are short, and sessions last 12 hours. Anyone with file access to the data folder can still edit the database, the head file and its key; the audit checks make that detectable only against someone without all three. Locking a name after five failures also lets a stranger lock a person out for a minute.

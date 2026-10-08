@@ -43,15 +43,15 @@ const ICONS = {
   workflows: "M4 6h16M4 12h16M4 18h10M18 16l2 2 3-4",
   about: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01",
 };
-const NAV = [
-  ["", "Dashboard", "dashboard"], ["data", "Data", "data"], ["ask", "Ask your data", "ask"],
-  ["forecast", "Forecasts", "forecast"], ["alerts", "Fraud & anomalies", "alerts"],
-  ["risk", "Customer risk", "risk"], ["workflows", "Workflows", "workflows"], ["about", "About & guide", "about"],
+const NAV = [  // route, label, icon, short label for the phone tab grid
+  ["", "Dashboard", "dashboard", "Home"], ["data", "Data", "data", "Data"], ["ask", "Ask your data", "ask", "Ask"],
+  ["forecast", "Forecasts", "forecast", "Forecast"], ["alerts", "Fraud & anomalies", "alerts", "Fraud"],
+  ["risk", "Customer risk", "risk", "Risk"], ["workflows", "Workflows", "workflows", "Workflows"], ["about", "About & guide", "about", "About"],
 ];
 
 function renderNav(counts = {}) {
-  $("#nav").innerHTML = NAV.map(([r, label, ic]) =>
-    `<a href="#/${r}" data-r="${r}" class="${S.route === r ? "active" : ""}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${ICONS[ic]}"/></svg><span class="t">${label}</span>${counts[r] ? `<span class="badge acc">${counts[r]}</span>` : ""}</a>`).join("");
+  $("#nav").innerHTML = NAV.map(([r, label, ic, short]) =>
+    `<a href="#/${r}" data-r="${r}" class="${S.route === r ? "active" : ""}" aria-label="${label}"${S.route === r ? ' aria-current="page"' : ""}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICONS[ic]}"/></svg><span class="t">${label}</span><span class="ts" aria-hidden="true">${short}</span>${counts[r] ? `<span class="badge acc">${counts[r]}</span>` : ""}</a>`).join("");
 }
 
 /* ---------------------------------------------------------------- router */
@@ -172,12 +172,12 @@ PAGES.data = async (app) => {
   const [srcs, sch, fields] = await Promise.all([api("/api/sources"), api("/api/schema"), api("/api/sales-fields")]);
   const active = srcs.find((s) => s.active);
   const tableCard = (t) => `<details class="card" style="padding:12px 16px"><summary>${esc(t.name)} <span class="muted small">${t.rows == null ? "" : num(t.rows) + " rows · "}${t.columns.length} columns</span></summary>
-    <div class="scroll" style="max-height:260px;margin-top:8px"><table><thead><tr>${t.columns.map((c) => `<th>${esc(c.name)}<div class="muted" style="text-transform:none;font-weight:400">${esc(c.type)}</div></th>`).join("")}</tr></thead>
+    <div class="scroll" style="max-height:260px;margin-top:8px"><table class="nowrap"><thead><tr>${t.columns.map((c) => `<th>${esc(c.name)}<div class="muted" style="text-transform:none;font-weight:400">${esc(c.type)}</div></th>`).join("")}</tr></thead>
     <tbody>${t.sample.map((r) => `<tr>${r.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
   app.innerHTML = head("Data", "Connect a database or upload sheets. Everything you ask is read-only.")
     + `<div class="grid cols-2">
       <div class="card"><h2>Sources</h2>
-        <table><tbody>${srcs.map((s) => `<tr><td><b>${esc(s.name)}</b><div class="small muted">${esc(s.kind)} · ${esc(s.location)}</div></td>
+        <table class="sources"><colgroup><col><col style="width:9.5rem"></colgroup><tbody>${srcs.map((s) => `<tr><td><b>${esc(s.name)}</b><div class="small muted src-loc" title="${esc(s.location)}">${esc(s.kind)} · ${esc(s.location)}</div></td>
           <td class="num">${s.active ? '<span class="badge good">active</span>' : `<button class="btn ghost small" data-act="use" data-id="${s.id}">Use</button>`}
           ${["sqlite", "postgres"].includes(s.kind) ? `<button class="btn ghost small" data-act="rm" data-id="${s.id}">Remove</button>` : ""}</td></tr>`).join("")}</tbody></table>
         <details style="margin-top:12px"><summary>Connect SQLite or PostgreSQL</summary>
@@ -277,9 +277,14 @@ function resultChart(res) {
   const money = /revenue|refund|value|spend|total|amount|price|sales/i.test(c.y[0]);
   const f = money ? (v) => "£" + Charts.compact(v) : Charts.compact;
   if (c.type === "line") return Charts.line({ labels: res.rows.map((r) => r[xi]), series: c.y.map((n) => ({ name: n, values: res.rows.map((r) => r[ci(n)]) })), fmt: f });
-  if (res.rows.length > 25) return Charts.columns({ rows: res.rows.map((r) => [r[xi], r[ci(c.y[0])]]), fmt: f });
-  return Charts.bars({ rows: res.rows.map((r) => [r[xi], r[ci(c.y[0])]]), fmt: f, labelW: 180 });
+  // categories read best as horizontal bars with the full label; past BAR_CAP only the largest are drawn
+  const all = res.rows.map((r) => [r[xi], r[ci(c.y[0])]]).filter((r) => typeof r[1] === "number");
+  if (all.length <= BAR_CAP) return Charts.bars({ rows: all, fmt: f, labelW: 180 });
+  const top = [...all].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, BAR_CAP);
+  return Charts.bars({ rows: top, fmt: f, labelW: 180 })
+    + `<p class="small muted chart-cap">Chart shows the ${BAR_CAP} largest by ${esc(c.y[0])}; ${all.length - BAR_CAP} more in the table.</p>`;
 }
+const BAR_CAP = 12;
 function fmtCell(name, v) {
   if (v == null) return "";
   if (typeof v === "number") return /revenue|refund|value|spend|total|amount|price|sales/i.test(name) ? gbp(v) : num(v, 2);
@@ -290,10 +295,41 @@ function resultTable(res) {
   return `<div class="scroll"><table><thead><tr>${res.columns.map((c) => `<th class="${typeof (res.rows[0] || [])[res.columns.indexOf(c)] === "number" ? "num" : ""}">${esc(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((v, i) => `<td class="${typeof v === "number" ? "num" : ""}">${fmtCell(res.columns[i], v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
   <p class="small muted">${res.rows.length} row${res.rows.length === 1 ? "" : "s"}${res.rows.length > 300 ? " (first 300 shown)" : ""}${res.truncated ? ` - capped at ${S.state.max_rows} rows` : ""}</p>`;
 }
+// A refused or failed run replaces the whole result: the previous chart and table must not stay
+// under the refusal, or it reads as if the refused SQL returned them. The SQL stays editable.
+function showRefusal(message, sql, extra = "") {
+  const out = $("#ask-out");
+  out.innerHTML = `<div class="card stack" id="ask-refused"><div class="row"><span class="badge bad">not run</span><span class="small muted">No rows: nothing from an earlier question is shown.</span></div>${err({ message })}${extra}
+    ${sql != null ? `<label class="f">The SQL you ran<textarea id="sql-box" rows="${Math.min(14, String(sql).split("\n").length + 1)}" spellcheck="false">${esc(sql)}</textarea></label>
+    <div class="row"><button class="btn ghost small" id="run-sql">Run edited SQL</button><button class="btn ghost small" id="copy-sql">Copy</button><span class="small muted">Only one SELECT is ever run.</span></div>` : ""}</div>`;
+  wireSql(out);
+}
+function wireSql(out) {
+  if (!document.querySelector("#sql-box")) return;
+  $("#run-sql").onclick = async () => {
+    const sql = $("#sql-box").value;
+    out.innerHTML = loading("Running your SQL");
+    try { showResult(await post("/api/sql", { sql })); } catch (e) { showRefusal(e.message || String(e), sql); }
+    loadHistory();
+  };
+  $("#copy-sql").onclick = async () => {
+    try { await navigator.clipboard.writeText($("#sql-box").value); toast("Copied"); }
+    catch (e) { toast("Copy is blocked here; select the SQL and copy it by hand", true); }
+  };
+  if (document.querySelector("#csv-sql")) $("#csv-sql").onclick = async () => {
+    try {
+      const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: $("#sql-box").value }) });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || r.statusText); }
+      const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = "analyst-export.csv"; a.click(); URL.revokeObjectURL(a.href);
+      toast(`${r.headers.get("X-Rows")} rows exported${r.headers.get("X-Truncated") === "true" ? " (cut at the cap)" : ""}`);
+    } catch (x) { toast(x.message, true); }
+  };
+}
 function showResult(res) {
   const out = $("#ask-out");
   if (!res.ok) {
-    out.innerHTML = `<div class="card">${err({ message: res.error })}${res.sql ? `<pre class="sql" style="margin-top:10px">${esc(res.sql)}</pre>` : ""}${res.note ? `<p class="small muted">${esc(res.note)}</p>` : ""}${res.examples && res.examples.length ? `<p class="small muted">Try:</p><div class="chips">${res.examples.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>` : ""}</div>`;
+    const extra = `${res.note ? `<p class="small muted">${esc(res.note)}</p>` : ""}${res.examples && res.examples.length ? `<p class="small muted">Try:</p><div class="chips">${res.examples.map((x) => `<button class="chip" data-q="${esc(x)}">${esc(x)}</button>`).join("")}</div>` : ""}`;
+    showRefusal(res.error, res.sql || null, extra);
     return;
   }
   out.innerHTML = `<div class="card stack">
@@ -306,16 +342,7 @@ function showResult(res) {
     ${resultTable(res)}
     <details open><summary>The SQL that ran</summary><textarea id="sql-box" rows="${Math.min(14, res.sql.split("\n").length + 1)}" spellcheck="false">${esc(res.sql)}</textarea>
     <div class="row" style="margin-top:8px"><button class="btn ghost small" id="run-sql">Run edited SQL</button><button class="btn ghost small" id="copy-sql">Copy</button><button class="btn ghost small" id="csv-sql" title="Up to 50,000 rows; text starting with = + - @ is made safe for spreadsheets">Download CSV</button><span class="small muted">Edits are checked the same way: anything but one SELECT is refused.</span></div></details></div>`;
-  $("#run-sql").onclick = async () => { try { showResult(await post("/api/sql", { sql: $("#sql-box").value })); loadHistory(); } catch (e) { out.insertAdjacentHTML("afterbegin", `<div style="margin-bottom:10px">${err(e)}</div>`); } };
-  $("#csv-sql").onclick = async () => {
-    try {
-      const r = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: $("#sql-box").value }) });
-      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || r.statusText); }
-      const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = "analyst-export.csv"; a.click(); URL.revokeObjectURL(a.href);
-      toast(`${r.headers.get("X-Rows")} rows exported${r.headers.get("X-Truncated") === "true" ? " (cut at the cap)" : ""}`);
-    } catch (x) { toast(x.message, true); }
-  };
-  $("#copy-sql").onclick = () => { navigator.clipboard && navigator.clipboard.writeText($("#sql-box").value); toast("Copied"); };
+  wireSql(out);
 }
 async function loadHistory() {
   const h = await api("/api/ask/history");
@@ -333,7 +360,7 @@ PAGES.ask = async (app) => {
     <div class="card" style="margin-top:16px"><h2>Recent questions</h2><div id="hist"></div></div>`;
   const go = async (q) => {
     if (!q.trim()) { Motion.shake($("#q")); return; } $("#q").value = q; $("#ask-out").innerHTML = loading("Asking");
-    try { showResult(await post("/api/ask", { question: q })); } catch (e) { $("#ask-out").innerHTML = err(e); }
+    try { showResult(await post("/api/ask", { question: q })); } catch (e) { showRefusal(e.message || String(e), null); }
     loadHistory();
   };
   $("#go").onclick = () => go($("#q").value);
@@ -343,6 +370,7 @@ PAGES.ask = async (app) => {
 };
 
 /* ---------------------------------------------------------------- forecast */
+const METHOD_LABEL = { base: "Own forecasts", bottom_up: "Bottom-up", top_down: "Top-down", mint_ols: "MinT (OLS)", mint_wls: "MinT (weighted)", weighted_blend: "Blend" };
 const FS = { horizon: 8, per_category: 3, method: "mint_wls", sel: "All products" };
 PAGES.forecast = async (app) => {
   app.innerHTML = head("Forecasts", "Weekly units per product and category, forecast so the numbers add up, with a backtest that says where to trust it.")
@@ -363,30 +391,34 @@ function drawForecast(r) {
   const total = r.nodes.find((n) => n.level === "total");
   const badge = (n) => n.backtest.beats_seasonal_naive == null ? '<span class="badge">n/a</span>' : n.backtest.beats_seasonal_naive ? `<span class="badge good" title="Backtest MAE is ${n.backtest.relative_mae}x seasonal naive's">beats naive ${n.backtest.relative_mae}x</span>` : `<span class="badge warn" title="Backtest MAE is ${n.backtest.relative_mae}x seasonal naive's">naive wins ${n.backtest.relative_mae}x</span>`;
   const sum = (a) => a.reduce((x, y) => x + y, 0);
+  const moved = (own, fin) => Math.abs(fin - own) >= 50 && Math.abs(fin - own) >= 0.5 * Math.max(own, 1);  // flag what reconciliation changed a lot
   const order = []; const walk = (name, depth) => { const n = r.nodes.find((x) => x.name === name); order.push([n, depth]); r.nodes.filter((c) => c.parent === name).forEach((c) => walk(c.name, depth + 1)); };
   walk(total.name, 0);
   $("#f-out").innerHTML = `<div class="kpis">
       <div class="kpi"><div class="l">Totals add up</div><div class="v">${r.coherent ? "Yes" : "No"}</div><div class="delta muted">before reconciling: ${r.coherent_before_reconciliation ? "yes" : "no"}</div></div>
       <div class="kpi"><div class="l">Series beating seasonal naive</div><div class="v">${bt.nodes_beating_seasonal_naive} of ${bt.nodes_judged}</div><div class="delta muted">${bt.folds} backtest origins, ${bt.horizon} weeks each</div></div>
       <div class="kpi"><div class="l">Forecast, all products</div><div class="v">${num(sum(total.forecast))}</div><div class="delta muted">units over ${r.horizon} weeks</div></div>
-      <div class="kpi"><div class="l">Best method at the total</div><div class="v" style="font-size:1.2rem">${esc(bt.best_method_at_total.replace("_", " "))}</div><div class="delta muted">lowest backtest error there</div></div></div>
-    <div class="grid split">
-      <div class="card"><h2 id="f-title"></h2><div id="f-chart"></div><div id="f-facts" class="small muted"></div></div>
-      <div class="card"><h2>Backtest: mean absolute error by level</h2>
-        <div class="scroll" style="max-height:none"><table><thead><tr><th>Level</th><th class="num">Seasonal naive</th>${best.map((k) => `<th class="num">${esc(k.replace("_", " "))}</th>`).join("")}</tr></thead>
+      <div class="kpi"><div class="l">Best method at the total</div><div class="v" style="font-size:1.2rem">${esc(METHOD_LABEL[bt.best_method_at_total] || bt.best_method_at_total)}</div><div class="delta muted">lowest backtest error there</div></div></div>
+    ${r.seasonal_note ? `<div class="note warn" style="margin-bottom:16px">${esc(r.seasonal_note)}</div>` : ""}
+    <div class="card"><h2 id="f-title"></h2><div id="f-chart"></div><div id="f-facts" class="small muted"></div></div>
+    <div class="card" style="margin-top:16px"><h2>Backtest: mean absolute error by level</h2>
+        <div class="scroll" style="max-height:none"><table class="fit"><thead><tr><th>Level</th><th class="num">Seasonal naive</th>${best.map((k) => `<th class="num">${esc(METHOD_LABEL[k] || k)}</th>`).join("")}</tr></thead>
         <tbody>${bt.by_level.map((l) => { const lo = Math.min(...best.map((k) => l[k])); return `<tr><td>${esc(l.level)} <span class="muted small">(${l.nodes})</span></td><td class="num">${num(l.seasonal_naive, 1)}</td>${best.map((k) => `<td class="num" style="${l[k] === lo ? "font-weight:700;color:var(--accent)" : ""}">${num(l[k], 1)}</td>`).join("")}</tr>`; }).join("")}</tbody></table></div>
-        <p class="small muted">Units per week, averaged over the same ${bt.folds} rolling origins (${esc(bt.origins[0])} to ${esc(bt.origins[bt.origins.length - 1])}); lower is better and the best method per level is bold. Models see only the history before each origin. Demand pattern per product: ${Object.entries(r.patterns).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(", ")}.</p></div></div>
-    <div class="card" style="margin-top:16px"><h2>Every series</h2><div class="scroll"><table><thead><tr><th>Series</th><th>Pattern</th><th>Model</th><th class="num">Last 4 weeks</th><th class="num">Next ${r.horizon} weeks</th><th>Backtest vs seasonal naive</th></tr></thead>
-      <tbody>${order.map(([n, d]) => `<tr class="click" data-n="${esc(n.name)}"><td style="padding-left:${10 + d * 18}px">${d === 0 ? "<b>" : ""}${esc(n.name.split("/").pop())}${d === 0 ? "</b>" : ""}</td><td><span class="badge">${esc(n.pattern)}</span></td><td class="small">${esc(n.model)}</td><td class="num">${num(sum(n.history.slice(-4)))}</td><td class="num">${num(sum(n.forecast))}</td><td>${badge(n)}</td></tr>`).join("")}</tbody></table></div>
-      <p class="small muted">Click a row to chart it. "Other" rows hold every product of the category that is not listed, so each category and the total are real totals. ETS is exponential smoothing with a 52-week season once two years exist; Croston handles products that sell in occasional bursts. Negative forecasts are set to zero before adding up.</p></div>`;
+        <p class="small muted">Units per week, averaged over the same ${bt.folds} rolling origins (${esc(bt.origins[0])} to ${esc(bt.origins[bt.origins.length - 1])}); lower is better and the best method per level is bold. "Own forecasts" are each series' forecast before reconciling. Models see only the history before each origin. Demand pattern per product: ${Object.entries(r.patterns).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(", ")}.</p></div>
+    <div class="card" style="margin-top:16px"><h2>Every series</h2><div class="scroll"><table><thead><tr><th>Series</th><th>Pattern</th><th>Model</th><th class="num">Last 4 weeks</th><th class="num">Same ${r.horizon} weeks last year</th><th class="num">Own forecast</th><th class="num">Next ${r.horizon} weeks</th><th>Backtest vs seasonal naive</th></tr></thead>
+      <tbody>${order.map(([n, d]) => { const own = sum(n.base_forecast), fin = sum(n.forecast), mv = moved(own, fin); return `<tr class="click" data-n="${esc(n.name)}"><td style="padding-left:${10 + d * 18}px">${d === 0 ? "<b>" : ""}${esc(n.name.split("/").pop())}${d === 0 ? "</b>" : ""}</td><td><span class="badge">${esc(n.pattern)}</span></td><td class="small">${esc(n.model)}</td><td class="num">${num(sum(n.history.slice(-4)))}</td><td class="num">${n.last_year ? num(sum(n.last_year)) : "n/a"}</td><td class="num">${num(own)}</td><td class="num">${num(fin)}${mv ? ` <span class="badge warn" title="Reconciliation (${esc(METHOD_LABEL[r.method] || r.method)}) changed this series' own forecast of ${num(own)} to ${num(fin)}">${fin > own ? "+" : "−"}${num(Math.abs(fin - own))} reconciled</span>` : ""}</td><td>${badge(n)}</td></tr>`; }).join("")}</tbody></table></div>
+      <p class="small muted">Click a row to chart it. "Other" rows hold every product of the category that is not listed, so each category and the total are real totals. "Own forecast" is the series' model on its own history; "Next ${r.horizon} weeks" is after reconciliation, which makes every level add up. ${r.method.startsWith("mint") ? "MinT spreads the gap between a category's (or the total's) own forecast and the sum of its products' forecasts over the products in roughly equal units, not in proportion to their size, so a small or dormant product can be moved by hundreds of units (badge). Choose Bottom-up to keep every product's own forecast." : ""} ETS is exponential smoothing${r.seasonal ? " with a 52-week season" : ""}; TSB handles products that sell in occasional bursts and decays toward zero while a product does not sell. Negative forecasts are set to zero before adding up.</p></div>`;
   const pick = (name) => {
     FS.sel = name; const n = r.nodes.find((x) => x.name === name) || total;
     $("#f-title").textContent = n.name;
     const hist = n.history, labels = [...r.weeks.slice(-hist.length), ...r.future_weeks];
-    $("#f-chart").innerHTML = Charts.line({ labels, split: hist.length, series: [
+    // this card spans the page, so the chart is drawn as wide as its box (readable text at any width)
+    const fw = document.querySelector("#f-chart").clientWidth || 520;
+    $("#f-chart").innerHTML = Charts.line({ labels, split: hist.length, width: Math.min(1100, Math.max(520, fw)), height: fw > 700 ? 280 : 230, series: [
       { name: "actual units", values: [...hist, ...r.future_weeks.map(() => null)] },
       { name: "forecast", dashed: true, color: "var(--c2)", values: [...hist.map((_, i) => (i === hist.length - 1 ? hist[i] : null)), ...n.forecast] },
-      { name: "before reconciling", dashed: true, color: "var(--c3)", values: [...hist.map(() => null), ...n.base_forecast] }] });
+      { name: "own forecast, before reconciling", dashed: true, color: "var(--c3)", values: [...hist.map(() => null), ...n.base_forecast] },
+      ...(n.last_year ? [{ name: "same weeks last year", dashed: true, color: "var(--c4)", values: [...hist.map(() => null), ...n.last_year] }] : [])] });
     const b = n.backtest;
     $("#f-facts").innerHTML = `Model <b>${esc(n.model)}</b> (${esc(n.pattern)}${n.adi ? `, ADI ${n.adi}, CV² ${n.cv2}` : ""}). Backtest MAE ${num(b.mae, 1)} against seasonal naive ${num(b.seasonal_naive_mae, 1)}; MASE ${b.mase ?? "n/a"}; sMAPE ${b.smape}.`;
     $$("#f-out tr.click").forEach((tr) => tr.style.background = tr.dataset.n === name ? "var(--accent-soft)" : "");
@@ -439,8 +471,8 @@ PAGES.risk = async (app) => {
   const m = r.metrics, fairBlock = (label, f) => {
     if (!f || !f.groups) return `<p class="muted small">${esc((f && f.note) || "")}</p>`;
     const cmp = f.comparisons ? Object.entries(f.comparisons)[0] : null;
-    return `<h3>By ${esc(label.replace("_", " "))}</h3><table><thead><tr><th>Group</th><th class="num">Customers</th><th class="num">Approved</th><th class="num">Observed bad rate</th><th class="num">Good customers approved</th></tr></thead><tbody>
-      ${Object.values(f.groups).map((g) => `<tr><td>${esc(g.group)}${g.group === f.reference_group ? ' <span class="badge">reference</span>' : ""}</td><td class="num">${g.n}</td><td class="num">${pct(g.approval_rate)}</td><td class="num">${pct(g.bad_rate)}</td><td class="num">${pct(g.true_positive_rate)}</td></tr>`).join("")}</tbody></table>
+    return `<h3>By ${esc(label.replace("_", " "))}</h3><div class="scroll" style="max-height:none"><table><thead><tr><th>Group</th><th class="num">Customers</th><th class="num">Approved</th><th class="num">Observed bad rate</th><th class="num">Good customers approved</th></tr></thead><tbody>
+      ${Object.values(f.groups).map((g) => `<tr><td>${esc(g.group)}${g.group === f.reference_group ? ' <span class="badge">reference</span>' : ""}</td><td class="num">${g.n}</td><td class="num">${pct(g.approval_rate)}</td><td class="num">${pct(g.bad_rate)}</td><td class="num">${pct(g.true_positive_rate)}</td></tr>`).join("")}</tbody></table></div>
       ${cmp ? `<p class="small">Disparate impact (${esc(cmp[0])} vs ${esc(f.reference_group)}): <b>${cmp[1].disparate_impact}</b> ${f.four_fifths_rule_flag ? '<span class="badge bad">below four-fifths</span>' : '<span class="badge good">above four-fifths</span>'} · equalised-odds gap ${cmp[1].equalised_odds_gap}</p>` : ""}`;
   };
   app.innerHTML = head("Customer risk", `A points scorecard from customer behaviour. Outcome: <b>${esc(r.outcome)}</b>.`)
@@ -470,7 +502,7 @@ PAGES.risk = async (app) => {
     const best = Math.max(...c.points.map((p) => p.points), 1);
     $("#r-drawer").innerHTML = `<div class="scrim" data-close></div><div class="drawer stack"><div class="row"><h2 style="margin:0">Customer ${esc(c.customer_id)}</h2><button class="btn ghost small right" data-close>Close</button></div>
       <div class="row"><span class="badge ${c.decision === "APPROVE" ? "good" : "bad"}">${c.decision}</span><span class="badge">score ${c.score} (cut-off ${c.score_cutoff})</span><span class="badge">risk ${pct(c.pd)}</span><span class="muted small">${esc(c.country)} · ${c.split} split</span></div>
-      <div><h3>Points by feature</h3>${c.points.map((p) => `<div class="row small" style="flex-wrap:nowrap;margin:4px 0"><span style="width:150px">${esc(p.feature)}</span><div class="bar" style="flex:1"><i style="width:${(p.points / best) * 100}%"></i></div><span class="num" style="width:36px">${p.points}</span><span class="muted mono" style="width:120px;overflow:hidden;text-overflow:ellipsis">${esc(p.bin)}</span></div>`).join("")}</div>
+      <div><h3>Points by feature</h3>${c.points.map((p) => `<div class="row small" style="flex-wrap:nowrap;margin:4px 0"><span style="width:150px">${esc(p.feature)}</span><div class="bar" style="flex:1"><i style="width:${(p.points / best) * 100}%"></i></div><span class="num" style="width:36px">${p.points}</span><span class="muted mono" style="width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.bin)}">${esc(p.bin)}</span></div>`).join("")}</div>
       <div><h3>Reason codes</h3>${c.reasons.length ? `<ol>${c.reasons.map((x) => `<li>${esc(x.text)}</li>`).join("")}</ol>` : '<p class="muted small">No feature lost points against its best band.</p>'}${c.warnings.length ? `<div class="note warn">${c.warnings.map(esc).join("<br>")}</div>` : ""}</div>
       <div><h3>Current credit limit</h3><p>${c.credit_limit ? gbp0(c.credit_limit.limit_gbp) + ' <span class="muted small">set ' + esc(c.credit_limit.set_at) + "</span>" : '<span class="muted">none set</span>'}</p></div>
       <div class="card flat"><h3>Change the credit limit</h3><div class="row"><label class="f">New limit (£)<input type="number" id="cl-new" min="0" step="50" value="${c.credit_limit ? c.credit_limit.limit_gbp : 1000}"></label><button class="btn" id="cl-go" style="align-self:end">Raise ticket</button></div><p class="small muted">Goes to the approval queue as ${esc(S.actor || "you once you sign in")}. An increase for a declined customer needs the owner too.</p></div></div>`;
@@ -558,11 +590,11 @@ const roleOf = (n) => (S.state.users.find((u) => u.name === n) || {}).role || ""
 /* ---------------------------------------------------------------- about & guide */
 PAGES.about = async (app) => {
   const L = (r, t) => `<a href="#/${r}">${t}</a>`;
-  const sec = (id, title, body) => `<section class="card guide-sec" id="g-${id}"><h2>${title}</h2>${body}</section>`;
+  const sec = (id, title, body, wide = false) => `<section class="card guide-sec${wide ? " wide" : ""}" id="g-${id}"><h2>${title}</h2>${body}</section>`;
   app.innerHTML = head("About & guide", "What this is, how to use it, what it will not do, and where your data lives.")
     + `<nav class="chips guide-toc" aria-label="On this page">${[["what", "What it is"], ["does", "What it does"], ["use", "How to use it"], ["not", "What it does not do"], ["privacy", "Privacy"], ["vision", "Vision and goal"], ["maker", "About the maker"]]
       .map(([i, t]) => `<a class="chip" href="#/about" data-jump="g-${i}">${t}</a>`).join("")}</nav>`
-    + `<div class="stack guide">`
+    + `<div class="guide guide-grid">`
     + sec("what", "What it is", `<p>Analyst-in-a-Box is an AI back office for a small business that runs on your own computer. Connect a database or add a spreadsheet and you can ask questions in English or Roman Urdu, see the SQL that answered them, forecast demand, screen for odd orders and refunds, score customers, and push refunds and credit-limit changes through approval gates with a tamper-evident audit trail. It works offline; a language model is optional and its output is never trusted.</p>`)
     + sec("does", "What it does", `<ul>
       <li>${L("", "Dashboard")}: KPI cards with sparklines and charts for revenue, orders, customers and refunds, plus a live example question.</li>
@@ -581,7 +613,7 @@ A1002,TEA2,1,6.00</pre>Press Load example to try it. Output: a table per sheet u
       <li><b>Build the business tables</b> (optional) on ${L("data", "Data")}: map the columns of an order-lines sheet (invoice, stock code, quantity, date, price, customer, country) and the dashboard, forecasts, fraud screen and risk page work on your data.</li>
       <li><b>Ask</b> on ${L("ask", "Ask your data")}. Input: one question, for example <i>Top 10 products by revenue in 2011</i> or <i>har mahine ki bikri</i>. Output: the SQL, a table, a chart, and a note on how it was understood. "Revenue" means net revenue (completed sales minus cancellations); say "gross revenue" for the figure before cancellations.</li>
       <li><b>Check</b> ${L("forecast", "Forecasts")}, ${L("alerts", "Fraud & anomalies")} and ${L("risk", "Customer risk")}. Output: tables and charts with the reasons shown.</li>
-      <li><b>Act</b> on ${L("workflows", "Workflows")}. Sign in, raise a ticket from an alert or a customer, and have the required people approve it. Nobody can approve their own request; every step goes into the audit trail, and Verify checks it.</li></ol>`)
+      <li><b>Act</b> on ${L("workflows", "Workflows")}. Sign in, raise a ticket from an alert or a customer, and have the required people approve it. Nobody can approve their own request; every step goes into the audit trail, and Verify checks it.</li></ol>`, true)
     + sec("not", "What it does not do", `<ul>
       <li>It gives no fraud verdicts. There are no labels, so alerts are prompts for a person to look at; many flags are real customers buying a lot.</li>
       <li>The risk model is a refund-behaviour proxy, not credit-loss prediction, and it is weak on the small held-out split.</li>
@@ -614,6 +646,8 @@ async function boot() {
 }
 function drawWho() {
   const box = $("#who"), me = S.state.me;
+  $("#who-toggle").textContent = me ? me.name.split(" ")[0] : "Sign in";
+  $("#who-toggle").setAttribute("aria-label", me ? `Signed in as ${me.name}; account` : "Sign in");
   if (me) {
     box.innerHTML = `<div class="small">Signed in as <b>${esc(me.name)}</b> (${esc(me.role)})</div>
       <div class="row"><button class="btn ghost small" id="pin-btn">Change PIN</button><button class="btn ghost small" id="out-btn">Sign out</button></div>`;
@@ -638,7 +672,28 @@ function drawWho() {
     catch (x) { toast(x.message, true); }
   };
 }
-async function afterAuth() { await boot(); await refreshCounts(); route(); }
+/* A table wider than its card scrolls inside it; mark it so the cut-off edge reads as "more", not as clipped. */
+function markScrolls() {
+  $$(".scroll").forEach((el) => {
+    const more = el.scrollWidth > el.clientWidth + 2;
+    el.classList.toggle("x-more", more && el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+    let hint = el.nextElementSibling && el.nextElementSibling.classList.contains("scroll-hint") ? el.nextElementSibling : null;
+    if (more && !hint) { el.insertAdjacentHTML("afterend", '<p class="scroll-hint">Scroll sideways in the table for more columns.</p>'); el.onscroll = markScrolls; }
+    if (!more && hint) hint.remove();
+  });
+}
+let markT;
+new MutationObserver(() => { clearTimeout(markT); markT = setTimeout(markScrolls, 120); }).observe(document.querySelector("#app"), { childList: true, subtree: true });
+window.addEventListener("resize", () => { clearTimeout(markT); markT = setTimeout(markScrolls, 120); });
+async function afterAuth() { setWhoOpen(false); await boot(); await refreshCounts(); route(); }
+function setWhoOpen(on) {
+  document.querySelector(".side").classList.toggle("who-open", on);
+  $("#who-toggle").setAttribute("aria-expanded", String(on));
+  if (on) { const f = document.querySelector("#who input, #who select, #who button"); if (f) f.focus(); }
+}
+$("#who-toggle").onclick = () => setWhoOpen(!document.querySelector(".side").classList.contains("who-open"));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") setWhoOpen(false); });
+window.addEventListener("hashchange", () => setWhoOpen(false));
 $("#theme").onclick = () => {
   const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   const next = cur === "dark" ? "light" : "dark"; document.documentElement.dataset.theme = next;

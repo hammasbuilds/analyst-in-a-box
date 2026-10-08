@@ -1,4 +1,4 @@
-"""Recreate every gallery screenshot from the real UI (headless Chromium, dark mode, 1440x900).
+"""Recreate every gallery screenshot from the real UI (headless Edge, dark mode, 1440x900).
 
     uv run --with playwright --with pillow python scripts/gallery.py [OUT_DIR]
 
@@ -118,7 +118,10 @@ def main(out: str | None = None) -> int:
         dl_dir.mkdir()
 
         with sync_playwright() as p:
-            b = p.chromium.launch(executable_path=_chrome())
+            try:  # Edge first; Playwright's bundled Chromium if Edge is missing
+                b = p.chromium.launch(channel="msedge")
+            except Exception:
+                b = p.chromium.launch(executable_path=_chrome())
             ctx = b.new_context(viewport={"width": W, "height": H}, color_scheme="dark", accept_downloads=True)
             ctx.add_init_script("try{localStorage.setItem('aib-theme','dark')}catch(e){}")
             pg = ctx.new_page()
@@ -129,6 +132,7 @@ def main(out: str | None = None) -> int:
                 pg.wait_for_timeout(wait)
                 path = out_dir / f"{name}.png"
                 if full:  # fixed sidebar: grow the viewport to the page height instead of full_page
+                    pg.evaluate("window.scrollTo(0,0)")
                     h = min(int(pg.evaluate("document.documentElement.scrollHeight")), 2400)
                     pg.set_viewport_size({"width": W, "height": max(h, H)})
                     pg.wait_for_timeout(500)
@@ -191,7 +195,7 @@ def main(out: str | None = None) -> int:
 
             # ---------------------------------------------------------------- home / Try-it
             goto("", "#t-out .sqlview")
-            pg.wait_for_selector(".kpi")
+            pg.wait_for_selector("#dash .card", timeout=120000)
             shot("01-home", wait=1200)
             for i, n in enumerate(["02", "03", "04", "05"]):
                 pg.click(f"#t-chips .chip >> nth={i}")
@@ -259,6 +263,21 @@ def main(out: str | None = None) -> int:
             pg.wait_for_timeout(500)
             pg.wait_for_selector("#f-chart svg", timeout=120000)
             shot("13-forecast", full=True, wait=1500)
+            # the rows the owner asked about: a dormant product and one moved by reconciliation, own vs reconciled
+            pg.evaluate("""() => { const tr = [...document.querySelectorAll('tr[data-n]')].find((r) => r.dataset.n.includes('37410'));
+                const sc = tr.closest('.scroll'); sc.scrollTop = tr.offsetTop - 140; tr.click(); }""")
+            pg.wait_for_timeout(600)
+            scroll_to("#f-out .card:has(#f-chart)", 20)
+            pair_rows = pg.locator("#f-out .card:has(#f-chart)").first
+            t = tmp / "fc-top.png"
+            pair_rows.screenshot(path=str(t))
+            pg.locator("#f-out .card:has(tr[data-n])").first.scroll_into_view_if_needed()
+            pg.wait_for_timeout(400)
+            b2 = tmp / "fc-bottom.png"
+            pg.locator("#f-out .card:has(tr[data-n])").first.screenshot(path=str(b2))
+            _stack(t, b2, out_dir / "13b-forecast-series.png",
+                   "Product 37410 charted: no sales for 88 weeks, its own forecast (TSB) is about zero",
+                   "Every series: last year, own forecast and the reconciled forecast; the badge marks what MinT moved")
 
             # ---------------------------------------------------------------- fraud & anomalies
             goto("alerts", ".alert", 120000)
@@ -337,7 +356,8 @@ def main(out: str | None = None) -> int:
 
             # ---------------------------------------------------------------- about
             goto("about", ".guide-sec")
-            shot("25-about", wait=800)
+            pg.evaluate("window.scrollTo(0,0)")
+            shot("25-about", full=True, wait=800)
 
             # ---------------------------------------------------------------- data: upload and paste (last: they switch the active source)
             sign_in("Bilal Ahmed")

@@ -505,3 +505,57 @@ svg.chart rect.bx, svg.chart rect.bc { filter: drop-shadow(0 0 5px rgba(139,109,
 .guide pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; overflow-x: auto; margin: 6px 0; font-size: .85rem; }
 p.guide { margin: 6px 0; }
 #help { text-decoration: none; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; min-width: 34px; }
+
+/* ================= Audit fixes (2026-10-08) ================= */
+/* tables never clip: a wide table scrolls inside its card, and says so */
+.scroll { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 70%, transparent) transparent; }
+.scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+.scroll::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 55%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+.scroll.x-more { box-shadow: inset -18px 0 14px -14px color-mix(in srgb, var(--accent) 70%, transparent); }
+.scroll-hint { margin: 4px 0 0; font-size: .78rem; color: var(--muted); }
+table.fit th { white-space: normal; line-height: 1.25; }
+table.fit td, table.fit th { padding: 7px 8px; }
+.chart-cap { margin: 4px 0 0; }
+
+/* about: use the width, two columns of sections, the how-to across both */
+.guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 16px; align-items: start; }
+.guide-grid > .guide-sec.wide { grid-column: 1 / -1; }
+.guide-grid > .guide-sec.wide ol { columns: 2 380px; column-gap: 40px; }
+.guide-grid > .guide-sec.wide ol > li { break-inside: avoid; }
+.guide-grid .guide-sec p, .guide-grid .guide-sec li { max-width: none; }
+
+/* sign-in: in the sidebar on wide screens, behind a button on phones */
+#who-toggle { display: none; }
+aside nav a .ts { display: none; }
+@media (max-width: 860px) {
+  aside.side { display: grid; grid-template-columns: 1fr auto; gap: 8px 10px; align-items: center; position: relative; padding: 10px 12px; }
+  .brand { padding: 0; }
+  .side .foot { grid-column: 2; grid-row: 1; margin: 0; display: flex; gap: 8px; align-items: center; }
+  .side .foot > .row { flex-wrap: nowrap; gap: 6px; }
+  #llmstat { display: none; }
+  #who-toggle { display: inline-block; white-space: nowrap; max-width: 9.5em; overflow: hidden; text-overflow: ellipsis; }
+  .side #who { display: none; }
+  .side.who-open #who { display: grid; gap: 8px; position: absolute; top: 100%; right: 8px; left: 8px; z-index: 50; padding: 14px; border-radius: 14px;
+    background: #0e1030; border: 1px solid var(--side-line); box-shadow: 0 18px 40px rgba(0,0,0,.5); }
+  .side.who-open #who label { display: block; }
+  aside nav { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; overflow: visible; order: initial; }
+  aside nav a { flex-direction: column; gap: 2px; padding: 6px 2px; font-size: .74rem; text-align: center; white-space: nowrap; }
+  aside nav a span.t, aside nav a.active span.t { display: none; }
+  aside nav a .ts { display: block; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  aside nav a .badge { position: absolute; top: 2px; right: 6px; margin: 0; padding: 0 6px; }
+  aside nav a:hover { transform: none; }
+}
+#f-chart .chart { max-width: none; }
+
+/* the content column may shrink below its widest table: tables scroll inside their card instead of widening the page */
+.shell { grid-template-columns: 244px minmax(0, 1fr); }
+main { min-width: 0; }
+.card, .kpi, .pane { min-width: 0; }
+td { overflow-wrap: break-word; }
+.badge, .btn, .gate { white-space: nowrap; overflow-wrap: normal; }
+@media (max-width: 860px) { .shell { grid-template-columns: minmax(0, 1fr); } }
+table.nowrap td, table.nowrap th { white-space: nowrap; }
+/* a long file path is shortened with an ellipsis, the full path is its tooltip */
+table.sources { table-layout: fixed; }
+table.sources td.num .btn { margin: 2px 0 2px 4px; }
+.src-loc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
