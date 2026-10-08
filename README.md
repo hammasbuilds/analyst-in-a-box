@@ -4,6 +4,8 @@ An AI back office for a small business that runs on your own computer, with no G
 
 Connect a database or drop in a spreadsheet and you can ask it questions in English or Roman Urdu and see the SQL it ran, forecast demand with totals that add up, get odd orders and refunds flagged with reasons, score customers with a points scorecard and a fairness panel, push refunds and credit-limit changes through approval gates with a tamper-evident audit trail, and watch the KPIs on a dashboard. Everything is offline; a language model is optional and never trusted.
 
+**Showcase page:** [analyst-in-a-box-bay.vercel.app](https://analyst-in-a-box-bay.vercel.app) shows every feature as captioned screenshots. The app itself runs on your own computer (see Run it).
+
 ## What it does
 
 - **Ask** in English or Roman Urdu; the SQL is shown, editable, read-only, and exportable as CSV.
